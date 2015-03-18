@@ -116,12 +116,13 @@ func (connection *Conn) waitLoop() {
 			connection.mu.RLock()
 			mu.Lock()
 			n, err := frameBuffer.WriteTo(connection.conn)
+			mu.Unlock()
 			connection.mu.RUnlock()
 			// разблокируем возможность установки соединения
 			if err != nil {
 				log.Println("Send error:", err)
-				// TODO: подозреваю, что здесь может быть блокировка
 				connection.errorChan <- errors.New("write error")
+				mu.RLock()
 				go func(cache []*sendMessage) { // отсылаем сообщения еще раз
 					log.Printf("Resend %3d last messages", len(cache))
 					for _, msg := range cache {
@@ -129,14 +130,16 @@ func (connection *Conn) waitLoop() {
 					}
 				}(cacheBuffer[:])
 				cacheBuffer = make([]*sendMessage, 0) // сбрасываем локальный кеш
+				mu.RUnlock()
 			} else {
 				log.Printf("Sended %3d messages (%d bytes)", len(cacheBuffer), n)
 				// увеличиваем время ожидания ответа после успешной отправки данных
 				connection.conn.SetReadDeadline(time.Now().Add(waitTime))
+				mu.RLock()
 				cache = append(cache, cacheBuffer...) // сохраняем в кеш
 				cacheBuffer = make([]*sendMessage, 0) // сбрасываем локальный кеш
+				mu.RUnlock()
 			}
-			mu.Unlock()
 		} // функция отправки сообщения
 	)
 
