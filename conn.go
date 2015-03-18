@@ -120,6 +120,7 @@ func (connection *Conn) waitLoop() {
 			// разблокируем возможность установки соединения
 			if err != nil {
 				log.Println("Send error:", err)
+				// TODO: подозреваю, что здесь может быть блокировка
 				connection.errorChan <- errors.New("write error")
 				go func(cache []*sendMessage) { // отсылаем сообщения еще раз
 					log.Printf("Resend %3d last messages", len(cache))

@@ -26,9 +26,9 @@ func TestConnect(t *testing.T) {
 	total := 500000
 	wg.Add(total)
 	start := time.Now()
-	for y := 0; y < 10; y++ {
+	for y := 0; y < 50; y++ {
 		go func(y int) {
-			for i := 0; i < total/2; i++ {
+			for i := 0; i < total/50; i++ {
 				msg := &Message{Payload: map[string]interface{}{
 					"aps": map[string]interface{}{
 						"alert": fmt.Sprintf("Test message %d-%d", y+1, i+1),
