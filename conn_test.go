@@ -24,11 +24,12 @@ func TestConnect(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	total := 500000
-	wg.Add(total)
+	streams := 1
+	wg.Add(total / streams * streams)
 	start := time.Now()
-	for y := 0; y < 50; y++ {
+	for y := 0; y < streams; y++ {
 		go func(y int) {
-			for i := 0; i < total/50; i++ {
+			for i := 0; i < total/streams; i++ {
 				msg := &Message{Payload: map[string]interface{}{
 					"aps": map[string]interface{}{
 						"alert": fmt.Sprintf("Test message %d-%d", y+1, i+1),
@@ -42,7 +43,7 @@ func TestConnect(t *testing.T) {
 				conn.Send(msg, token)
 				wg.Done()
 				// time.Sleep(50 * time.Millisecond)
-				// if i%(rand.Intn(3)+1) == 0 {
+				// if i%(rand.Intn(9)+1) == 0 {
 				// 	time.Sleep(time.Duration(rand.Intn(150)) * time.Millisecond)
 				// }
 			}

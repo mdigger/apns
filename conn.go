@@ -106,6 +106,7 @@ func (connection *Conn) waitLoop() {
 		send        = func() {
 			frameTimer.Stop() // останавливаем таймер задержки отправки
 			// проверяем соединение: если не установлено, то соединяемся
+		reconnect:
 			connection.mu.Lock() // если идет переустановка соединения, то ждем.
 			if connection.conn == nil {
 				if err := connection.reconnect(); err != nil {
@@ -121,16 +122,7 @@ func (connection *Conn) waitLoop() {
 			// разблокируем возможность установки соединения
 			if err != nil {
 				log.Println("Send error:", err)
-				connection.errorChan <- errors.New("write error")
-				mu.RLock()
-				go func(cache []*sendMessage) { // отсылаем сообщения еще раз
-					log.Printf("Resend %3d last messages", len(cache))
-					for _, msg := range cache {
-						connection.sendMessageChan <- msg
-					}
-				}(cacheBuffer[:])
-				cacheBuffer = make([]*sendMessage, 0) // сбрасываем локальный кеш
-				mu.RUnlock()
+				goto reconnect // повторяем попытку отправки
 			} else {
 				log.Printf("Sended %3d messages (%d bytes)", len(cacheBuffer), n)
 				// увеличиваем время ожидания ответа после успешной отправки данных
@@ -179,19 +171,19 @@ func (connection *Conn) waitLoop() {
 
 			// Очистка кеша устаревших отправленных сообщений
 		case <-cleanup: // время для очистки кеша
-			if len(cache) == 0 {
+			l := len(cache) - 1
+			if l == -1 {
 				break
 			}
 			// удаляем "устаревшие" сообщения
-			live := make([]*sendMessage, 0)
-			for _, msg := range cache {
-				if time.Since(msg.created) < sendMessageLifeTime {
-					live = append(live, msg)
+			for i := l; i >= 0; i-- {
+				if time.Since(cache[i].created) >= sendMessageLifeTime {
+					if i < l {
+						log.Printf("Deleted %d old messages in cache", l-i)
+						cache = cache[i:]
+					}
+					break
 				}
-			}
-			if count := len(cache) - len(live); count > 0 {
-				log.Printf("Deleted %d old messages in cache", count)
-				cache = live
 			}
 
 			// Обработка ошибок
@@ -264,11 +256,9 @@ func (connection *Conn) reconnect() error {
 	log.Printf("Connecting to server %s ...", connection.host)
 	var startDuration = time.Duration(10 * time.Second)
 	for {
-		switch conn, err := connection.config.Dial(connection.host); err.(type) {
+		conn, err := connection.config.Dial(connection.host)
+		switch err.(type) {
 		case nil: // соединение установлено
-			// Apple разрывает соединение, если в нем некоторое время нет активности.
-			// Поэтому устанавливаем время активности. Позже, мы будем его продлевать
-			// после каждой успешной отправки сообщений.
 			conn.SetReadDeadline(time.Now().Add(waitTime))
 			printTLSConnectionState(conn)
 			connection.conn = conn
