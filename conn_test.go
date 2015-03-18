@@ -26,7 +26,7 @@ func TestConnect(t *testing.T) {
 	total := 500000
 	wg.Add(total)
 	start := time.Now()
-	for y := 0; y < 2; y++ {
+	for y := 0; y < 10; y++ {
 		go func(y int) {
 			for i := 0; i < total/2; i++ {
 				msg := &Message{Payload: map[string]interface{}{
@@ -40,16 +40,16 @@ func TestConnect(t *testing.T) {
 					"float":  rand.Float64(),
 				}}
 				conn.Send(msg, token)
+				wg.Done()
 				// time.Sleep(50 * time.Millisecond)
-				// if i%(rand.Intn(500)+1) == 0 {
+				// if i%(rand.Intn(3)+1) == 0 {
 				// 	time.Sleep(time.Duration(rand.Intn(150)) * time.Millisecond)
 				// }
-				wg.Done()
 			}
 		}(y)
 	}
 	wg.Wait()
 	fmt.Println("time", time.Since(start).String(), "to send", total, "messages")
 	time.Sleep(1 * time.Second)
-	fmt.Println("Count:", conn.counter)
+	// fmt.Println("Count:", conn.counter)
 }

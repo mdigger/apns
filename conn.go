@@ -31,12 +31,8 @@ type Conn struct {
 	config          *Config           // конфигурация и сертификаты
 	host            string            // адрес сервера
 	sendMessageChan chan *sendMessage // канал передачи сообщений на отправку
-	cache           []*sendMessage    // кеш отправленных сообщений
-	cacheBuffer     []*sendMessage    // кеш добавленных в буфер на отправку сообщений
-	frameBuffer     *bytes.Buffer     // буфер отправляемых сообщений
-	frameTimer      *time.Timer       // таймер отправки буфера сообщений
-	counter         uint32            // счетчик отправленных сообщений
-	mu              sync.Mutex        // блокировка записи в буфер
+	errorChan       chan error        // канал передачи ошибок
+	mu              sync.RWMutex      // блокировка работы с соединением
 }
 
 // Connect возвращает нового инициализированного клиента на основании указанной конфигурации соединения.
@@ -61,9 +57,7 @@ func Connect(config *Config) (*Conn, error) {
 		config:          config,
 		host:            host,
 		sendMessageChan: make(chan *sendMessage),
-		cache:           make([]*sendMessage, 0),
-		cacheBuffer:     make([]*sendMessage, 0),
-		frameBuffer:     new(bytes.Buffer),
+		errorChan:       make(chan error),
 	}
 	go connection.handleReads() // запускаем чтение ошибок из соединения
 	go connection.waitLoop()    // запускаем сервис чтения и записи сообщений
@@ -85,162 +79,102 @@ func (connection *Conn) Send(msg *Message, tokens ...[]byte) error {
 	return nil
 }
 
-// reconnect устанавливает соединение с сервером APNS.
-// При установке делается бесконечное число попыток с небольшой задержкой, пока соединение
-// не будет установлено. Возвращает ошибку только в том случае, если это не ошибка соединения.
-func (connection *Conn) reconnect() error {
-	log.Printf("Connecting to server %s ...", connection.host)
-	startDuration := time.Duration(10 * time.Second)
-	for {
-		conn, err := connection.config.Dial(connection.host)
-		if err == nil { // соединение установлено
-			// log.Println("Connected")
-			// Apple разрывает соединение, если в нем некоторое время нет активности.
-			// Поэтому устанавливаем время активности. Позже, мы будем его продлевать
-			// после каждой успешной отправки сообщений.
-			conn.SetReadDeadline(time.Now().Add(waitTime))
-			printTLSConnectionState(conn)
-			connection.mu.Lock()
-			connection.conn = conn
-			connection.mu.Unlock()
-			go connection.handleReads() // запускаем чтение ошибок из соединения
-			return nil
-		}
-		if err, ok := err.(net.Error); ok { // сетевая ошибка
-			log.Println("Error connecting to APNS:", err)
-			log.Printf("Waiting %s ...", startDuration.String())
-			time.Sleep(startDuration) // добавляем задержку между попытками
-			if startDuration < time.Minute*30 {
-				startDuration += time.Duration(10 * time.Second) // увеличиваем задержку
-			}
-			continue
-		}
-		if err == io.EOF {
-			log.Println("Connection closed by server")
-			log.Printf("Waiting %s ...", startDuration.String())
-			time.Sleep(startDuration) // добавляем задержку между попытками
-			continue
-		}
-		// неизвестная и необрабатываемая нами ошибка
-		log.Println("Connection error:", err)
-		log.Printf("Type [%T]: %#v", err, err)
-		return err // не сетевая ошибка
-	}
-}
-
 // handleReads ожидает получения ошибки из открытого соединения с сервером.
 func (connection *Conn) handleReads() {
 	header := make([]byte, 6) // читаем заголовок сообщения
-	// connection.mu.Lock()
 	n, err := connection.conn.Read(header)
-	// connection.mu.Unlock()
 	switch {
 	case err != nil:
-		connection.handleError(err)
+		connection.errorChan <- err
 	case n == 6:
-		connection.handleError(parseAPNSError(header))
+		connection.errorChan <- parseAPNSError(header)
 	default:
-		connection.handleError(errors.New("bad apple error size"))
+		connection.errorChan <- errors.New("bad apple error size")
 	}
-}
-
-// handleError обрабатывает полученные от сервера ошибки.
-func (connection *Conn) handleError(err error) {
-	connection.conn.Close() // в любом случае закрываем соединение при любой ошибке
-	// connection.conn = nil
-	switch err.(type) {
-	case net.Error:
-		err := err.(net.Error)
-		if err.Timeout() {
-			log.Println("Timeout error, not doing auto reconnect")
-			return
-		}
-		log.Println("Network Error:", err)
-	case apnsError:
-		err := err.(apnsError)
-		if err.Id > 0 {
-			log.Printf("Error in message [%d]: %s", err.Id, apnsErrorMessages[err.Status])
-			// находим по идентификатору сообщение в кеше
-			cache := connection.cache[:]
-			var index int
-			for i, msg := range cache {
-				if msg.id == err.Id {
-					index = i
-					break
-				}
-			}
-			// исключаем само сообщение с ошибкой, если оно не понравилось Apple
-			if err.Status > 0 {
-				index = index + 1
-			}
-			if resend := connection.cache[index:]; len(resend) > 0 {
-				// посылаем недоставленные сообщения заново
-				go func() {
-					log.Printf("Repeat sending %d messages from cache", len(resend))
-					for _, msg := range resend {
-						connection.sendMessageChan <- msg
-					}
-				}()
-			}
-			connection.cache = make([]*sendMessage, 0) // очищаем кеш
-		} else {
-			log.Printf("APNS error: %s", apnsErrorMessages[err.Status])
-		}
-	default:
-		if err == io.EOF {
-			log.Println("Connection closed by server")
-		} else {
-			log.Println("Error:", err)
-			log.Printf("Type [%T]: %#v", err, err)
-		}
-	}
-	// пытаемся подключиться...
-	// connection.mu.Lock()
-	if err := connection.reconnect(); err != nil {
-		panic("Non network error connecting") // ошибка - нет сети совсем
-	}
-	// connection.mu.Unlock()
 }
 
 // waitLoop запускает бесконечный цикл обработки ошибок и отправки сообщений.
 func (connection *Conn) waitLoop() {
 	var (
-		cleanup = time.Tick(sendMessageLifeTime) // время для очистки кеша
+		cleanup     = time.Tick(sendMessageLifeTime) // время для очистки кеша
+		counter     uint32                           // счетчик отправленных сообщений
+		frameBuffer = new(bytes.Buffer)              // буфер отправляемых сообщений
+		frameTimer  *time.Timer                      // таймер отправки буфера сообщений
+		cache       = make([]*sendMessage, 0)        // кеш отправленных сообщений
+		cacheBuffer = make([]*sendMessage, 0)        // кеш добавленных в буфер на отправку сообщений
+		mu          sync.RWMutex                     // блокировка работы с буфером
+		send        = func() {
+			frameTimer.Stop() // останавливаем таймер задержки отправки
+			// проверяем соединение: если не установлено, то соединяемся
+			connection.mu.Lock() // если идет переустановка соединения, то ждем.
+			if connection.conn == nil {
+				if err := connection.reconnect(); err != nil {
+					panic("unknown network error")
+				}
+			}
+			connection.mu.Unlock()
+			connection.mu.RLock()
+			mu.Lock()
+			n, err := frameBuffer.WriteTo(connection.conn)
+			connection.mu.RUnlock()
+			// разблокируем возможность установки соединения
+			if err != nil {
+				log.Println("Send error:", err)
+				connection.errorChan <- errors.New("write error")
+				go func(cache []*sendMessage) { // отсылаем сообщения еще раз
+					log.Printf("Resend %3d last messages", len(cache))
+					for _, msg := range cache {
+						connection.sendMessageChan <- msg
+					}
+				}(cacheBuffer[:])
+				cacheBuffer = make([]*sendMessage, 0) // сбрасываем локальный кеш
+			} else {
+				log.Printf("Sended %3d messages (%d bytes)", len(cacheBuffer), n)
+				// увеличиваем время ожидания ответа после успешной отправки данных
+				connection.conn.SetReadDeadline(time.Now().Add(waitTime))
+				cache = append(cache, cacheBuffer...) // сохраняем в кеш
+				cacheBuffer = make([]*sendMessage, 0) // сбрасываем локальный кеш
+			}
+			mu.Unlock()
+		} // функция отправки сообщения
 	)
+
 	for {
 		select {
+
+		// Новое входящее сообщение для отправки
 		case msg := <-connection.sendMessageChan: // новое сообщение на отправку
 			if msg.IsExpired() {
 				break // пропускаем устаревшее сообщение
 			}
 			if msg.id == 0 {
-				connection.mu.Lock()
-				connection.counter++
-				msg.id = connection.counter // присваиваем уникальный идентификатор
-				connection.mu.Unlock()
+				counter++
+				msg.id = counter // присваиваем уникальный идентификатор
 			}
 			// формируем байтовое представление сообщения и добавляем его в буфер на отправку
 			data := msg.Byte()
-			if connection.frameBuffer.Len()+len(data) > tcpFrameMax {
-				// log.Println("Frame buffer is full")
-				connection.sendBuffer()
+			mu.Lock() // блокируем изменение локальных переменных
+			length := frameBuffer.Len() + len(data)
+			mu.Unlock() // разблокируем изменение локальных переменных
+			if length > tcpFrameMax {
+				send()
 			}
 			// добавляем сообщение в буфер на отправку
-			connection.mu.Lock()
-			binary.Write(connection.frameBuffer, binary.BigEndian, uint8(2))
-			binary.Write(connection.frameBuffer, binary.BigEndian, uint32(len(data)))
-			bytes.NewReader(data).WriteTo(connection.frameBuffer)
-			connection.cacheBuffer = append(connection.cacheBuffer, msg) // сохраняем в локальный кеш
+			mu.RLock() // блокируем чтение локальных беременных из других потоков
+			binary.Write(frameBuffer, binary.BigEndian, uint8(2))
+			binary.Write(frameBuffer, binary.BigEndian, uint32(len(data)))
+			bytes.NewReader(data).WriteTo(frameBuffer)
+			cacheBuffer = append(cacheBuffer, msg) // сохраняем в локальный кеш
 			// взводим таймер задержки отправки сообщений
-			if connection.frameTimer == nil {
-				connection.frameTimer = time.AfterFunc(FramingTimeout, connection.sendBuffer)
+			if frameTimer == nil {
+				frameTimer = time.AfterFunc(FramingTimeout, send)
 			} else {
-				connection.frameTimer.Reset(FramingTimeout)
+				frameTimer.Reset(FramingTimeout)
 			}
-			connection.mu.Unlock()
+			mu.RUnlock() // разблокируем чтение локальных беременных из других потоков
+
+			// Очистка кеша устаревших отправленных сообщений
 		case <-cleanup: // время для очистки кеша
-			connection.mu.Lock()
-			cache := connection.cache
 			if len(cache) == 0 {
 				break
 			}
@@ -253,40 +187,105 @@ func (connection *Conn) waitLoop() {
 			}
 			if count := len(cache) - len(live); count > 0 {
 				log.Printf("Deleted %d old messages in cache", count)
-				connection.cache = live
+				cache = live
 			}
-			connection.mu.Unlock()
+
+			// Обработка ошибок
+		case err := <-connection.errorChan: // получена ошибка
+			switch err.(type) { // обрабатываем ошибки в зависимости от их типа
+			case net.Error: // сетевая ошибка
+				err := err.(net.Error)
+				if err.Timeout() {
+					log.Println("Timeout error, not doing auto reconnect")
+					continue // не осуществляем подключения
+				}
+				log.Println("Network Error:", err)
+			case apnsError: // ошибка, вернувшаяся от сервер APNS
+				err := err.(apnsError)
+				if err.Id > 0 {
+					log.Printf("Error in message [%d]: %s", err.Id, apnsErrorMessages[err.Status])
+					// находим по идентификатору сообщение в кеше
+					var index int
+					for i, msg := range cache {
+						if msg.id == err.Id {
+							index = i
+							break
+						}
+					}
+					// исключаем само сообщение с ошибкой, если оно не понравилось Apple
+					if err.Status > 0 {
+						index = index + 1
+					}
+					if resend := cache[index:]; len(resend) > 0 {
+						// посылаем недоставленные сообщения заново
+						go func() {
+							log.Printf("Repeat sending %d messages from cache", len(resend))
+							for _, msg := range resend {
+								connection.sendMessageChan <- msg
+							}
+						}()
+					}
+					cache = make([]*sendMessage, 0) // очищаем кеш
+				} else {
+					log.Printf("APNS error: %s", apnsErrorMessages[err.Status])
+				}
+			default:
+				if err == io.EOF {
+					log.Println("Connection closed by server")
+				} else {
+					log.Println("Error:", err)
+					log.Printf("Type [%T]: %#v", err, err)
+				}
+			}
+			// переподключаемся...
+			if err := connection.reconnect(); err != nil {
+				panic("unknown network error")
+			}
 		}
 	}
 }
 
-// sendBuffer отправляет сообщения, хранящиеся в буфере на отправку.
-func (connection *Conn) sendBuffer() {
-	connection.mu.Lock()
-	connection.frameTimer.Stop()
-	if connection.frameBuffer.Len() == 0 {
-		connection.mu.Unlock()
-		return
+// reconnect осуществляет цикл подключений к серверу, пока это не случится или пока
+// не возникнет ошибка, которую мы не знаем как обрабатывать.
+func (connection *Conn) reconnect() error {
+	connection.mu.RLock() // блокируем соединение на чтение
+	defer connection.mu.RUnlock()
+
+	// в любом случае, открытое соединение после ошибки закрывается
+	if connection.conn != nil {
+		connection.conn.Close()
+		connection.conn = nil
 	}
-	n, err := connection.frameBuffer.WriteTo(connection.conn)
-	connection.mu.Unlock()
-	if err != nil {
-		log.Println("Send error:", err)
-		connection.handleError(errors.New("write error"))
-		go func(cacheBuffer []*sendMessage) { // отсылаем сообщения еще раз
-			log.Printf("Resend %3d last messages", len(cacheBuffer))
-			for _, msg := range cacheBuffer {
-				connection.sendMessageChan <- msg
+	// пытаемся подключиться...
+	log.Printf("Connecting to server %s ...", connection.host)
+	var startDuration = time.Duration(10 * time.Second)
+	for {
+		switch conn, err := connection.config.Dial(connection.host); err.(type) {
+		case nil: // соединение установлено
+			// Apple разрывает соединение, если в нем некоторое время нет активности.
+			// Поэтому устанавливаем время активности. Позже, мы будем его продлевать
+			// после каждой успешной отправки сообщений.
+			conn.SetReadDeadline(time.Now().Add(waitTime))
+			printTLSConnectionState(conn)
+			connection.conn = conn
+			go connection.handleReads() // запускаем чтение ошибок из соединения
+			return nil
+		case net.Error: // сетевая ошибка
+			err := err.(net.Error)
+			log.Println("Error connecting to APNS:", err)
+		default: // другая ошибка
+			if err == io.EOF {
+				log.Println("Connection closed by server")
+			} else {
+				log.Println("Connection error:", err)
+				log.Printf("Type [%T]: %#v", err, err)
+				// return err // необрабатываемая ошибка
 			}
-		}(connection.cacheBuffer)
-		connection.cacheBuffer = make([]*sendMessage, 0)
-		return
+		}
+		log.Printf("Waiting %s ...", startDuration.String())
+		time.Sleep(startDuration) // добавляем задержку между попытками
+		if startDuration < time.Minute*30 {
+			startDuration += time.Duration(10 * time.Second) // увеличиваем задержку
+		}
 	}
-	log.Printf("Sended %3d messages (%d bytes)", len(connection.cacheBuffer), n)
-	// увеличиваем время ожидания ответа после успешной отправки данных
-	connection.conn.SetReadDeadline(time.Now().Add(waitTime))
-	connection.mu.Lock()
-	connection.cache = append(connection.cache, connection.cacheBuffer...) // сохраняем в кеш
-	connection.cacheBuffer = make([]*sendMessage, 0)                       // сбрасываем локальный кеш
-	connection.mu.Unlock()
 }
