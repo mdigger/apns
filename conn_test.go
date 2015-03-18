@@ -10,7 +10,9 @@ import (
 )
 
 func TestConnect(t *testing.T) {
-	token, err := hex.DecodeString("F389410AE1B57972DBBF6EB0C05C2626AB69EDE88F523D7EED49FA6E63A6C266")
+	// token, err := hex.DecodeString("F389410AE1B57972DBBF6EB0C05C2626AB69EDE88F523D7EED49FA6E63A6C266")
+	token, err := hex.DecodeString("B8108B88198789E9696E11A2FFE9710B776A9851673C2FDEDFCE1BE318AE7C90")
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,8 +25,8 @@ func TestConnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	total := 500000
-	streams := 1
+	total := 50000
+	streams := 2
 	wg.Add(total / streams * streams)
 	start := time.Now()
 	for y := 0; y < streams; y++ {

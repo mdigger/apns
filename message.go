@@ -70,7 +70,7 @@ type sendMessage struct {
 	payload    []byte    // содержимое сообщения
 	expiration uint32    // время жизни
 	priority   uint8     // приоритет
-	created    time.Time // дата и время создания
+	created    time.Time // дата и время создания (добавления в кеш)
 }
 
 // Id возвращает уникальный идентификатор отправляемого сообщения.
@@ -160,6 +160,5 @@ func (smsg *sendMessage) WithToken(token []byte) *sendMessage {
 		payload:    smsg.payload,
 		expiration: smsg.expiration,
 		priority:   smsg.priority,
-		created:    time.Now(),
 	}
 }
