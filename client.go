@@ -1,7 +1,7 @@
 package apns
 
 import (
-	"log"
+	"errors"
 	"sync"
 	"time"
 )
@@ -19,6 +19,8 @@ var (
 	DurationReconnect = time.Duration(10 * time.Second)
 	// Время задержки отправки сообщений по умолчанию.
 	DurationSend = 100 * time.Millisecond
+	// Ошибка добавления уведомления на отправку для закрытого клиента.
+	ErrClientIsClosed = errors.New("client is closed")
 )
 
 type Client struct {
@@ -27,6 +29,7 @@ type Client struct {
 	host      string             // адрес сервера
 	queue     *notificationQueue // список уведомлений для отправки
 	isSendign bool               // флаг активности отправки
+	isClosed  bool               // флаг закрытия клиента
 	mu        sync.RWMutex       // блокировка доступа к флагу посылки
 	Delay     time.Duration      // время задержки отправки сообщений
 }
@@ -50,19 +53,46 @@ func NewClient(config *Config) *Client {
 
 // Send отправляет сообщение на указанные токены устройств.
 func (client *Client) Send(ntf *Notification, tokens ...[]byte) error {
+	client.mu.RLock()
+	if client.isClosed {
+		client.mu.RUnlock()
+		return ErrClientIsClosed
+	}
+	client.mu.RUnlock()
 	// добавляем сообщение в очередь на отправку
 	if err := client.queue.AddNotification(ntf, tokens...); err != nil {
 		return err
 	}
 	// разбираемся с отправкой
 	client.mu.RLock()
-	if client.isSendign { // если отсылка уже запущена, то выходим
-		client.mu.RUnlock()
-		return nil
-	}
+	started := client.isSendign
 	client.mu.RUnlock()
-	go client.sendQueue() // запускаем отправку сообщений из очереди
+	if !started {
+		client.mu.Lock()
+		client.isSendign = true // взводим флаг запуска сервиса
+		client.mu.Unlock()
+		go client.sendQueue() // запускаем отправку сообщений из очереди
+	}
 	return nil
+}
+
+func (client *Client) Close(wait bool) {
+	client.mu.Lock()
+	client.isClosed = true // больше не принимаем новых уведомлений
+	client.mu.Unlock()
+	if wait {
+	repeat:
+		client.mu.RLock()
+		started := client.isSendign
+		client.mu.RUnlock()
+		if started { // ждем окончания рассылки
+			time.Sleep(client.Delay)
+			goto repeat
+		}
+	}
+	if client.conn != nil {
+		client.conn.Close()
+	}
 }
 
 // sendQueue непосредственно осуществляет отправку уведомлений на сервер, пока в очереди есть
@@ -75,19 +105,11 @@ func (client *Client) Send(ntf *Notification, tokens ...[]byte) error {
 // Функция отслеживает попытку запуска нескольких копий и не позволяет это делать ввиду полной
 // не эффективности данного мероприятия.
 func (client *Client) sendQueue() {
-	// defer un(trace("[send]")) // DEBUG
-	client.mu.RLock()
-	if client.isSendign { // процесс уже запущен
-		client.mu.RUnlock()
-		return
-	}
-	client.mu.RUnlock()
+	// defer un(trace("[send]"))        // DEBUG
 	if !client.queue.IsHasToSend() { // выходим, если нечего отправлять
+		// log.Println("Nothing to send...")
 		return
 	}
-	client.mu.Lock()
-	client.isSendign = true // взводим флаг активной посылки
-	client.mu.Unlock()
 	// отправляем сообщения на сервер
 	var (
 		ntf    *notification // последнее полученное на отправку уведомление
@@ -111,20 +133,21 @@ reconnect:
 					ntf = client.queue.Get() // попробуем еще раз...
 				}
 			}
-			// если больше нет уведомлений или после добавления этого уведомления
-			// буфер переполнится, то отправляем буфер на сервер
-			if ntf == nil || buf.Len()+ntf.Len() > MaxFrameBuffer {
+			// если больше нет уведомлений, а буфер не пустой, или после добавления
+			// этого уведомления буфер переполнится, то отправляем буфер на сервер
+			if (ntf == nil && buf.Len() > 0) || (buf.Len()+ntf.Len() > MaxFrameBuffer) {
 				n, err := buf.WriteTo(client.conn) // отправляем буфер на сервер
 				if err != nil {
-					log.Println("Send error:", err)
+					client.config.log.Println("Send error:", err)
 					break // ошибка соединения - соединяемся заново
 				}
 				// увеличиваем время ожидания ответа после успешной отправки данных
 				client.conn.SetReadDeadline(time.Now().Add(TiemoutRead))
-				log.Printf("Sended %d messages (%d bytes)", sended, n)
+				client.config.log.Printf("Sended %d messages (%d bytes)", sended, n)
 				sended = 0 // сбрасываем счетчик отправленного
 			}
 			if ntf == nil { // очередь закончилась
+				// log.Println("Queue is empty...")
 				break reconnect // прерываем весь цикл
 			}
 			ntf.WriteTo(buf)        // сохраняем бинарное представление уведомления в буфере

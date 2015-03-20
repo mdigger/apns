@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
+	"os"
 	"time"
 )
 
 var (
-	TimeoutConnect = time.Duration(5) * time.Second // время ожидания ответа от сервера при соединении
-	TiemoutRead    = 2 * time.Minute                // время закрытия соединения, если не активно
+	TimeoutConnect = time.Duration(30) * time.Second // время ожидания ответа от сервера при соединении
+	TiemoutRead    = 2 * time.Minute                 // время закрытия соединения, если не активно
 )
 
 // Config описывает конфигурацию для соединения с APNS.
@@ -20,6 +22,7 @@ type Config struct {
 	BundleId    string          // идентификатор приложения
 	Sandbox     bool            // флаг отладочного режима
 	Certificate tls.Certificate // сертификаты
+	log         *log.Logger     // лог для вывода информации
 }
 
 // LoadConfig загружает и возвращает конфигурацию для APNS из JSON-файла. Формат такого файла
@@ -33,6 +36,8 @@ func LoadConfig(filename string) (*Config, error) {
 	if err = json.Unmarshal(data, config); err != nil {
 		return nil, err
 	}
+	prefix := fmt.Sprintf("[apns:%s] ", config.BundleId)
+	config.log = log.New(os.Stderr, prefix, log.LstdFlags)
 	return config, nil
 }
 

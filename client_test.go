@@ -34,29 +34,31 @@ func TestClient(t *testing.T) {
 	// client.Delay = time.Duration(0)
 
 	var wg sync.WaitGroup
-	total := 5000
-	streams := 1
+	total := 10000
+	streams := 2
 	wg.Add(total / streams * streams)
 	start := time.Now()
 	for y := 0; y < streams; y++ {
-		func(y int) {
+		go func(y int) {
 			for i := 0; i < total/streams; i++ {
 				ntf := &Notification{Payload: map[string]interface{}{
 					"aps": map[string]interface{}{
 						"alert": fmt.Sprintf("Test message %d-%d", y+1, i+1),
 						"badge": i,
 					},
-					"time":   time.Now().Format(time.RFC3339Nano),
-					"uint32": rand.Uint32(),
-					"inf64":  rand.Int63(),
-					"float":  rand.Float64(),
+					"time": time.Now().Format(time.RFC3339Nano),
+					// "uint32": rand.Uint32(),
+					// "inf64":  rand.Int63(),
+					// "float":  rand.Float64(),
 				}}
-				client.Send(ntf, tokens...)
+				if err := client.Send(ntf, tokens...); err != nil {
+					t.Error(err)
+				}
 				wg.Done()
-				// time.Sleep(50 * time.Millisecond)
-				// if i%(rand.Intn(59)+1) == 0 {
-				// 	time.Sleep(time.Duration(rand.Intn(70)) * time.Millisecond)
-				// }
+				time.Sleep(50 * time.Millisecond)
+				if i%(rand.Intn(9)+1) == 0 {
+					time.Sleep(time.Duration(rand.Intn(300)) * time.Millisecond)
+				}
 			}
 		}(y)
 	}
@@ -64,5 +66,7 @@ func TestClient(t *testing.T) {
 	for client.queue.IsHasToSend() { // ждем, пока очередь не пуста
 		time.Sleep(time.Millisecond * 100)
 	}
+	client.Close(true)
 	fmt.Println("Complete! Time:", time.Since(start).String())
+	// time.Sleep(time.Second * 10)
 }

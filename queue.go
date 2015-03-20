@@ -2,7 +2,6 @@ package apns
 
 import (
 	"io"
-	"log"
 	"sync"
 	"time"
 )
@@ -35,7 +34,6 @@ func newNotificationQueue() *notificationQueue {
 		for { // бесконечный цикл проверки и очистки кеша
 			time.Sleep(CacheLifeTime)                     // спим заданное количество времени
 			var lifeTime = time.Now().Add(-CacheLifeTime) // время создания, после которого уведомления устарели
-			trace("[clear]")                              // DEBUG
 			q.mu.RLock()
 			// перебираем все отправленные в обратном порядке, но только если первое не является отправленным
 			for i := q.idUnsended; i > 0; i-- {
@@ -54,7 +52,6 @@ func newNotificationQueue() *notificationQueue {
 				continue loop // все обработано - уходим на глобальный повтор
 			}
 			q.mu.RUnlock()
-			un("[clear]") // DEBUG
 		}
 	}()
 	return q
@@ -116,7 +113,7 @@ func (q *notificationQueue) Get() *notification {
 		return nil
 	}
 	q.mu.Lock()
-	var result = q.list[q.idUnsended] // получаем первое неотправленное уведомление
+	var result = q.list[q.idUnsended] // получаем первое уведомление из очереди на отправку
 	q.idUnsended++                    // увеличиваем счетчик на следующее
 	q.mu.Unlock()
 	return result
@@ -180,7 +177,6 @@ func (q *notificationQueue) WriteTo(w io.Writer) (total int64, err error) {
 		if err != nil {
 			break // прерываемся, если ошибка
 		}
-		log.Printf("Sended %d messages (%d bytes)", i-sended, n)
 		sended = i // сохраняем индекс последнего отправленного уведомления
 	}
 	if q.idUnsended < sended {

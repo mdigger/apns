@@ -3,7 +3,6 @@ package apns
 import (
 	"crypto/tls"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -15,6 +14,7 @@ import (
 type Conn struct {
 	*tls.Conn           // соединение с сервером
 	isConnected bool    // флаг установленного соединения
+	isClosed    bool    // флаг закрытия соединения
 	client      *Client // клиент соединения
 	mu          sync.Mutex
 }
@@ -27,12 +27,12 @@ func NewConn(client *Client) *Conn {
 // Dial осуществляет соединение с APNS-сервером и возвращает его. Если соединение
 // установить не получилось, то возвращается ошибка.
 func Dial(client *Client) (*Conn, error) {
-	log.Println("Connecting to server", client.host)
+	client.config.log.Println("Connecting to server", client.host)
 	tlsConn, err := client.config.Dial(client.host)
 	if err != nil {
 		return nil, err
 	}
-	log.Print(tlsConnectionStateString(tlsConn))
+	client.config.log.Print(tlsConnectionStateString(tlsConn))
 	var conn = &Conn{
 		Conn:        tlsConn,
 		isConnected: true,
@@ -55,6 +55,12 @@ func (conn *Conn) handleReads() {
 	if err == nil {
 		err = parseAPNSError(header) // разбираем сообщение и конвертируем в описание ошибки
 	}
+	conn.mu.Lock()
+	if conn.isClosed {
+		conn.mu.Unlock()
+		return // выходим без обработки ошибок при закрытии соединения
+	}
+	conn.mu.Unlock()
 	// обрабатываем ошибки в зависимости от их типа
 	switch err.(type) {
 	case net.Error: // сетевая ошибка
@@ -63,33 +69,43 @@ func (conn *Conn) handleReads() {
 			conn.mu.Lock()
 			conn.isConnected = false
 			conn.mu.Unlock()
-			log.Println("Timeout error, not doing auto reconnect")
+			conn.client.config.log.Println("Timeout error, not doing auto reconnect")
 			return // не осуществляем подключения
 		}
-		log.Println("Network Error:", err)
+		conn.client.config.log.Println("Network Error:", err)
 	case apnsError: // ошибка, вернувшаяся от сервер APNS
 		var err = err.(apnsError)
 		if err.Id == 0 {
-			log.Printf("APNS error: %s", apnsErrorMessages[err.Status])
+			conn.client.config.log.Printf("APNS error: %s", apnsErrorMessages[err.Status])
 			break
 		}
-		log.Printf("Error in message [%d]: %s", err.Id, apnsErrorMessages[err.Status])
+		conn.client.config.log.Printf("Error in message [%d]: %s", err.Id, apnsErrorMessages[err.Status])
 		// послать все сообщения после ошибочного заново
 		conn.mu.Lock()
 		conn.client.queue.ResendFromId(err.Id, err.Status > 0)
 		conn.mu.Unlock()
 	default:
 		if err == io.EOF {
-			log.Println("Connection closed by server")
+			conn.client.config.log.Println("Connection closed by server")
 			break
 		}
-		log.Println("Error:", err)
-		log.Printf("Type [%T]: %+v", err, err) // DEBUG
+		conn.client.config.log.Println("Error:", err)
+		conn.client.config.log.Printf("Type [%T]: %+v", err, err) // DEBUG
 	}
 	// снова подключаемся к серверу
 	if err = conn.Connect(); err != nil {
 		panic("unknown network error")
 	}
+}
+
+func (conn *Conn) Close() {
+	conn.mu.Lock()
+	if conn.Conn != nil {
+		conn.Conn.Close()
+	}
+	conn.isConnected = false
+	conn.isClosed = true
+	conn.mu.Unlock()
 }
 
 // Connect устанавливает новое соединение с сервером. Если предыдущее соединение
@@ -102,14 +118,18 @@ func (conn *Conn) Connect() error {
 		conn.Conn.Close()
 	}
 	conn.isConnected = false
+	if conn.isClosed {
+		conn.mu.Unlock()
+		return nil // не переустанавливаем закрытое соединение
+	}
 	conn.mu.Unlock()
 	var startDuration = DurationReconnect
 	for {
-		log.Println("Connecting to server", conn.client.host)
+		conn.client.config.log.Println("Connecting to server", conn.client.host)
 		tlsConn, err := conn.client.config.Dial(conn.client.host)
 		switch err.(type) {
 		case nil: // соединение установлено
-			log.Print(tlsConnectionStateString(tlsConn))
+			conn.client.config.log.Print(tlsConnectionStateString(tlsConn))
 			conn.mu.Lock()
 			conn.Conn = tlsConn
 			conn.isConnected = true
@@ -118,17 +138,17 @@ func (conn *Conn) Connect() error {
 			return nil
 		case net.Error: // сетевая ошибка
 			err := err.(net.Error)
-			log.Println("Error connecting to APNS:", err)
+			conn.client.config.log.Println("Error connecting to APNS:", err)
 		default: // другая ошибка
 			if err == io.EOF {
-				log.Println("Connection closed by server")
+				conn.client.config.log.Println("Connection closed by server")
 			} else {
-				log.Println("Connection error:", err)
-				log.Printf("Type [%T]: %#v", err, err) // DEBUG
+				conn.client.config.log.Println("Connection error:", err)
+				conn.client.config.log.Printf("Type [%T]: %#v", err, err) // DEBUG
 				// return err // необрабатываемая ошибка
 			}
 		}
-		log.Printf("Waiting %s ...", startDuration.String())
+		conn.client.config.log.Printf("Waiting %s ...", startDuration.String())
 		time.Sleep(startDuration) // добавляем задержку между попытками
 		if startDuration < time.Minute*30 {
 			startDuration += DurationReconnect // увеличиваем задержку

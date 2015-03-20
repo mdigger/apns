@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"io"
-	"log"
 	"time"
 )
 
@@ -28,7 +27,7 @@ func Feedback(config *Config) ([]*FeedbackResponse, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	log.Print(tlsConnectionStateString(conn))
+	config.log.Print(tlsConnectionStateString(conn))
 
 	var (
 		result = make([]*FeedbackResponse, 0)
