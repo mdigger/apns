@@ -9,30 +9,35 @@ import (
 	"time"
 )
 
-func TestConnect(t *testing.T) {
-	// token, err := hex.DecodeString("F389410AE1B57972DBBF6EB0C05C2626AB69EDE88F523D7EED49FA6E63A6C266")
-	token, err := hex.DecodeString("B8108B88198789E9696E11A2FFE9710B776A9851673C2FDEDFCE1BE318AE7C90")
+var tokenStrings = []string{
+	"F389410AE1B57972DBBF6EB0C05C2626AB69EDE88F523D7EED49FA6E63A6C266",
+	"B8108B88198789E9696E11A2FFE9710B776A9851673C2FDEDFCE1BE318AE7C90",
+}
 
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestClient(t *testing.T) {
 	config, err := LoadConfig("config.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn, err := config.Connect()
-	if err != nil {
-		t.Fatal(err)
+	var tokens = make([][]byte, len(tokenStrings))
+	for i, str := range tokenStrings {
+		token, err := hex.DecodeString(str)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[i] = token
 	}
+	var client = NewClient(config)
+
 	var wg sync.WaitGroup
-	total := 50000
+	total := 5000
 	streams := 2
 	wg.Add(total / streams * streams)
 	start := time.Now()
 	for y := 0; y < streams; y++ {
 		go func(y int) {
 			for i := 0; i < total/streams; i++ {
-				msg := &Message{Payload: map[string]interface{}{
+				ntf := &Notification{Payload: map[string]interface{}{
 					"aps": map[string]interface{}{
 						"alert": fmt.Sprintf("Test message %d-%d", y+1, i+1),
 						"badge": i,
@@ -42,7 +47,7 @@ func TestConnect(t *testing.T) {
 					"inf64":  rand.Int63(),
 					"float":  rand.Float64(),
 				}}
-				conn.Send(msg, token)
+				client.Send(ntf, tokens...)
 				wg.Done()
 				// time.Sleep(50 * time.Millisecond)
 				// if i%(rand.Intn(9)+1) == 0 {
@@ -52,7 +57,9 @@ func TestConnect(t *testing.T) {
 		}(y)
 	}
 	wg.Wait()
-	fmt.Println("time", time.Since(start).String(), "to send", total, "messages")
-	time.Sleep(1 * time.Second)
-	// fmt.Println("Count:", conn.counter)
+	fmt.Println("All message pull completed!")
+	for client.queue.IsHasToSend() {
+		time.Sleep(time.Millisecond)
+	}
+	fmt.Println("Complete! Time:", time.Since(start).String())
 }

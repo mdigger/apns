@@ -7,7 +7,8 @@ import (
 	"fmt"
 )
 
-var ErrBadResponseSize = errors.New("bad apple error size")
+// errBadResponseSize ошибка
+var errBadResponseSize = errors.New("bad apple error size")
 
 // Ошибка, возвращаемая сервером APNS.
 type apnsError struct {
@@ -16,6 +17,7 @@ type apnsError struct {
 	Id     uint32
 }
 
+// Error возвращает строковое представление ошибки.
 func (e apnsError) Error() string {
 	if e.Id != 0 {
 		return fmt.Sprintf("APNS %s [message id %d]", apnsErrorMessages[e.Status], e.Id)
@@ -23,15 +25,19 @@ func (e apnsError) Error() string {
 	return fmt.Sprintf("APNS %s", apnsErrorMessages[e.Status])
 }
 
+// parseAPNSError позволяет создать описание ошибки из набора байт, полученного от
+// сервера Apple.
 func parseAPNSError(data []byte) error {
 	if len(data) != 6 {
-		return ErrBadResponseSize
+		return errBadResponseSize
 	}
 	var err apnsError
 	binary.Read(bytes.NewReader(data), binary.BigEndian, &err)
 	return err
 }
 
+// apnsErrorMessages описывает известные мне на данный момент времени коды ошибок
+// и их текстовое представление.
 var apnsErrorMessages = map[uint8]string{
 	0:   "No Errors",
 	1:   "Processing Error",
