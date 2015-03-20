@@ -107,6 +107,7 @@ func (q *notificationQueue) Get() *notification {
 	}
 	q.mu.Lock()
 	var result = q.list[q.idUnsended] // получаем первое уведомление из очереди на отправку
+	result.Sended = time.Now()        // помечаем время отсылки
 	q.idUnsended++                    // увеличиваем счетчик на следующее
 	q.mu.Unlock()
 	return result
