@@ -1,10 +1,7 @@
 package apns
 
 import (
-	"crypto/tls"
-	"io"
 	"log"
-	"net"
 	"sync"
 	"time"
 )
@@ -20,19 +17,18 @@ var (
 	// время задержки увеличивается на эту величину, пока не достигнет максимального
 	// времени в 30 минут. После это уже расти не будет.
 	DurationReconnect = time.Duration(10 * time.Second)
-	// время задержки отправки сообщений
+	// Время задержки отправки сообщений по умолчанию.
 	DurationSend = 100 * time.Millisecond
 )
 
 type Client struct {
-	conn        *tls.Conn          // соединение с сервером
-	config      *Config            // конфигурация и сертификаты
-	host        string             // адрес сервера
-	queue       *notificationQueue // список уведомлений для отправки
-	timer       *time.Timer        // таймер задержки отправки
-	Delay       time.Duration      // время задержки отправки сообщений
-	isConnected bool               // флаг установленного соединения
-	mu          sync.Mutex
+	conn      *Conn              // соединение с сервером
+	config    *Config            // конфигурация и сертификаты
+	host      string             // адрес сервера
+	queue     *notificationQueue // список уведомлений для отправки
+	isSendign bool               // флаг активности отправки
+	mu        sync.RWMutex       // блокировка доступа к флагу посылки
+	Delay     time.Duration      // время задержки отправки сообщений
 }
 
 func NewClient(config *Config) *Client {
@@ -42,157 +38,103 @@ func NewClient(config *Config) *Client {
 	} else {
 		host = ServerApns
 	}
-	client := &Client{
+	var client = &Client{
 		config: config,
 		host:   host,
 		queue:  newNotificationQueue(),
 		Delay:  DurationSend,
 	}
+	client.conn = NewConn(client)
 	return client
 }
 
 // Send отправляет сообщение на указанные токены устройств.
 func (client *Client) Send(ntf *Notification, tokens ...[]byte) error {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if client.timer != nil {
-		client.timer.Stop() // останавливаем таймер, чтобы, не дай бог, не сработал параллельно
-	}
 	// добавляем сообщение в очередь на отправку
 	if err := client.queue.AddNotification(ntf, tokens...); err != nil {
 		return err
 	}
 	// разбираемся с отправкой
-	if client.Delay == 0 { // если задержка не установлена, то отправляем сразу
-		go client.send()
+	client.mu.RLock()
+	if client.isSendign { // если отсылка уже запущена, то выходим
+		client.mu.RUnlock()
 		return nil
 	}
-	// устанавливаем или сдвигаем, если уже был установлен, таймер с задержкой отправки
-	if client.timer == nil {
-		client.timer = time.AfterFunc(client.Delay, client.send)
-	} else {
-		client.timer.Reset(client.Delay)
-	}
+	client.mu.RUnlock()
+	go client.sendQueue() // запускаем отправку сообщений из очереди
 	return nil
 }
 
-// send непосредственно осуществляет отправку уведомлений на сервер.
-func (client *Client) send() {
-	defer un(trace("[send]")) // DEBUG
-	if !client.queue.IsHasToSend() {
-		return // выходим, если нечего отправлять
+// sendQueue непосредственно осуществляет отправку уведомлений на сервер, пока в очереди есть
+// хотя бы одно уведомление. Если в процессе отсылки происходит ошибка соединения, то соединение
+// автоматически восстанавливается.
+//
+// Если в очереди на отправку находится более одного уведомления, то они объединяются в один пакет
+// и этот пакет отправляется либо до достижении заданной длинны, либо по окончании очереди на отправку.
+//
+// Функция отслеживает попытку запуска нескольких копий и не позволяет это делать ввиду полной
+// не эффективности данного мероприятия.
+func (client *Client) sendQueue() {
+	// defer un(trace("[send]")) // DEBUG
+	client.mu.RLock()
+	if client.isSendign { // процесс уже запущен
+		client.mu.RUnlock()
+		return
 	}
-	for { // делаем это пока не отправим...
+	client.mu.RUnlock()
+	if !client.queue.IsHasToSend() { // выходим, если нечего отправлять
+		return
+	}
+	client.mu.Lock()
+	client.isSendign = true // взводим флаг активной посылки
+	client.mu.Unlock()
+	// отправляем сообщения на сервер
+	var (
+		ntf    *notification // последнее полученное на отправку уведомление
+		sended uint          // количество отправленных
+		buf    = getBuffer() // получаем из пулла байтовый буфер
+	)
+reconnect:
+	for { // делаем это пока не отправим все...
 		// проверяем соединение: если не установлено, то соединяемся
-		if client.conn == nil || !client.isConnected {
-			if err := client.Connect(); err != nil {
+		if client.conn == nil || !client.conn.isConnected {
+			if err := client.conn.Connect(); err != nil {
 				panic("unknown network error")
 			}
 		}
-		// отправляем сообщения на сервер
-		n, err := client.queue.WriteTo(client.conn)
-		if n > 0 {
-			log.Printf("Total sended %d bytes", n)
-		}
-		if err == nil {
-			// увеличиваем время ожидания ответа после успешной отправки данных
-			client.conn.SetReadDeadline(time.Now().Add(TiemoutRead))
-			break // задача выполнена - выходим
-		}
-		log.Println("Send error:", err)
-		client.isConnected = false
-	}
-}
-
-// Connect устанавливает новое соединение с сервером. Если предыдущее соединение
-// при этом было открыто, то оно автоматически закрывается. В случае ошибки установки
-// соединения, этот процесс повторяется до бесконечности с постоянно увеличивающимся
-// интервалом между попытками.
-func (client *Client) Connect() error {
-	client.isConnected = false
-	if client.conn != nil {
-		if err := client.conn.Close(); err != nil {
-			log.Println("Close error:", err)
-			// return err
-		}
-	}
-	var startDuration = DurationReconnect
-	for {
-		log.Println("Connecting to server", client.host)
-		conn, err := client.config.Dial(client.host)
-		switch err.(type) {
-		case nil: // соединение установлено
-			tlsConnectionStateString(conn)
-			client.conn = conn
-			client.isConnected = true
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go client.handleReads(&wg) // запускаем чтение ошибок из соединения
-			wg.Wait()                  // ждем окончания запуска сервиса
-			return nil
-		case net.Error: // сетевая ошибка
-			err := err.(net.Error)
-			log.Println("Error connecting to APNS:", err)
-		default: // другая ошибка
-			if err == io.EOF {
-				log.Println("Connection closed by server")
-			} else {
-				log.Println("Connection error:", err)
-				log.Printf("Type [%T]: %#v", err, err) // DEBUG
-				// return err // необрабатываемая ошибка
+		for { // пока не отправим все
+			// если уведомление уже было раньше получено, то новое не получаем
+			if ntf == nil {
+				ntf = client.queue.Get() // получаем уведомление из очереди
+				if ntf == nil && client.Delay > 0 {
+					time.Sleep(client.Delay) // если очередь пуста, то подождем немного
+					ntf = client.queue.Get() // попробуем еще раз...
+				}
 			}
-		}
-		log.Printf("Waiting %s ...", startDuration.String())
-		time.Sleep(startDuration) // добавляем задержку между попытками
-		if startDuration < time.Minute*30 {
-			startDuration += DurationReconnect // увеличиваем задержку
+			// если больше нет уведомлений или после добавления этого уведомления
+			// буфер переполнится, то отправляем буфер на сервер
+			if ntf == nil || buf.Len()+ntf.Len() > MaxFrameBuffer {
+				n, err := buf.WriteTo(client.conn) // отправляем буфер на сервер
+				if err != nil {
+					log.Println("Send error:", err)
+					break // ошибка соединения - соединяемся заново
+				}
+				// увеличиваем время ожидания ответа после успешной отправки данных
+				client.conn.SetReadDeadline(time.Now().Add(TiemoutRead))
+				log.Printf("Sended %d messages (%d bytes)", sended, n)
+				sended = 0 // сбрасываем счетчик отправленного
+			}
+			if ntf == nil { // очередь закончилась
+				break reconnect // прерываем весь цикл
+			}
+			ntf.WriteTo(buf)        // сохраняем бинарное представление уведомления в буфере
+			ntf.Sended = time.Now() // помечаем время отправки
+			ntf = nil               // забываем про уже отправленное
+			sended++                // увеличиваем счетчик отправленного
 		}
 	}
-}
-
-// handleReads читает из открытого соединения и ждет получения информации об ошибке.
-// После этого автоматически закрывает текущее соединение и запускает процесс установки
-// нового соединения, кроме случаев, когда соединение закрыто из-за долгой неактивности.
-//
-// Если в ответе от сервера содержится информация об идентификаторе ошибочного сообщения,
-// то все сообщения, отосланные после него будут заново автоматически отосланы.
-func (client *Client) handleReads(wg *sync.WaitGroup) {
-	defer un(trace("[handleReads]")) // DEBUG
-	wg.Done()                        // сигнализируем о запуске
-	var header = make([]byte, 6)     // читаем заголовок сообщения
-	_, err := client.conn.Read(header)
-	client.conn.Close() // после получения ошибки соединение закрывается
-	client.isConnected = false
-	if err == nil {
-		err = parseAPNSError(header)
-	}
-	switch err.(type) { // обрабатываем ошибки в зависимости от их типа
-	case net.Error: // сетевая ошибка
-		var err = err.(net.Error)
-		if err.Timeout() {
-			log.Println("Timeout error, not doing auto reconnect")
-			return // не осуществляем подключения
-		}
-		log.Println("Network Error:", err)
-	case apnsError: // ошибка, вернувшаяся от сервер APNS
-		var err = err.(apnsError)
-		if err.Id == 0 {
-			log.Printf("APNS error: %s", apnsErrorMessages[err.Status])
-			break
-		}
-		log.Printf("Error in message [%d]: %s", err.Id, apnsErrorMessages[err.Status])
-		// послать все сообщения после ошибочного заново
-		client.queue.ResendFromId(err.Id, err.Status > 0)
-	default:
-		if err == io.EOF {
-			log.Println("Connection closed by server")
-			break
-		}
-		log.Println("Error:", err)
-		log.Printf("Type [%T]: %+v", err, err) // DEBUG
-	}
-	// переподключаемся...
-	if err = client.Connect(); err != nil {
-		panic("unknown network error")
-	}
+	putBuffer(buf) // освобождаем буфер после работы
+	client.mu.Lock()
+	client.isSendign = false // сбрасываем флаг активной посылки
+	client.mu.Unlock()
 }

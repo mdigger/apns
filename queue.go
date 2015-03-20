@@ -60,20 +60,6 @@ func newNotificationQueue() *notificationQueue {
 	return q
 }
 
-// Add добавляет новые элементы в очередь на отправку. При добавлении автоматически назначается уникальный
-// идентификатор, если он не был назначен до этого.
-func (q *notificationQueue) Add(list ...*notification) {
-	q.mu.Lock()
-	for _, item := range list {
-		if item.Id == 0 {
-			q.counter++
-			item.Id = q.counter
-		}
-	}
-	q.list = append(q.list, list...)
-	q.mu.Unlock()
-}
-
 // AddNotification генерирует и добавляет в очередь новое уведомление для каждого токена устройства,
 // переданного в параметрах. В качестве шаблона используется сообщение в формате Notification.
 // Если Notification содержит некорректные данные для уведомления, то возвращается ошибка и ни одного
@@ -99,6 +85,67 @@ func (q *notificationQueue) AddNotification(ntf *Notification, tokens ...[]byte)
 	}
 	q.mu.Unlock()
 	return nil
+}
+
+// IsHasToSend возвращает true, если в списке есть неотправленные уведомления.
+func (q *notificationQueue) IsHasToSend() bool {
+	q.mu.RLock()
+	var result = len(q.list) > q.idUnsended
+	q.mu.RUnlock()
+	return result
+}
+
+// Put добавляет новые элементы в очередь на отправку. При добавлении автоматически назначается уникальный
+// идентификатор, если он не был назначен до этого.
+func (q *notificationQueue) Put(list ...*notification) {
+	q.mu.Lock()
+	for _, item := range list {
+		if item.Id == 0 {
+			q.counter++
+			item.Id = q.counter
+		}
+	}
+	q.list = append(q.list, list...)
+	q.mu.Unlock()
+}
+
+// Get возвращает первое не отправленное уведомление из списка. Если в списке нет неотправленных
+// уведомлений, то возвращается nil.
+func (q *notificationQueue) Get() *notification {
+	if !q.IsHasToSend() { // если нет не отправленных, то возвращаем nil
+		return nil
+	}
+	q.mu.Lock()
+	var result = q.list[q.idUnsended] // получаем первое неотправленное уведомление
+	q.idUnsended++                    // увеличиваем счетчик на следующее
+	q.mu.Unlock()
+	return result
+}
+
+// ResendFromId находит в списке отправленных уведомление с таким идентификатором и переставляет указатель
+// на отправку на него. Возвращает true, если уведомление с таким идентификатором найдено в списке.
+// Все уведомления в списке до найденного удаляются.
+
+// Если в качестве второго параметра указано значение true, то найденное уведомление тоже исключается
+// и будут отправлены только уведомления, которые находятся в списке после него.
+func (q *notificationQueue) ResendFromId(id uint32, exclude bool) bool {
+	q.mu.RLock()
+	for i := 0; i < q.idUnsended; i++ {
+		if q.list[i].Id != id { // находим сообщение с указанным идентификатором
+			continue
+		}
+		q.mu.RUnlock()
+		if exclude { // если указан флаг, что это уведомление нужно пропустить, то указываем на следующее
+			i++
+		}
+		q.mu.Lock()
+		q.list = q.list[i:] // удаляем все сообщения до найденного
+		q.idUnsended = 0    // в списке остались только еще не отправленные
+		q.mu.Unlock()
+		return true
+	}
+	q.mu.RUnlock()
+	return false
 }
 
 // WriteTo отправляет еще не отправленные сообщения в поток, и помечает их как отправленные в случае
@@ -145,36 +192,4 @@ func (q *notificationQueue) WriteTo(w io.Writer) (total int64, err error) {
 	}
 	q.mu.RUnlock()
 	return
-}
-
-// IsHasToSend возвращает true, если в списке есть неотправленные уведомления.
-func (q *notificationQueue) IsHasToSend() bool {
-	q.mu.RLock()
-	var result = len(q.list) > q.idUnsended
-	q.mu.RUnlock()
-	return result
-}
-
-// ResendFromId находит в списке отправленных сообщение с таким идентификатором и переставляет указатель
-// на отправку на него. Если в качестве второго параметра указано значение true, то найденное сообщение
-// тоже игнорируется. Все сообщения до него удаляются из кеша.
-func (q *notificationQueue) ResendFromId(id uint32, exclude bool) bool {
-	q.mu.RLock()
-	for i := 0; i < q.idUnsended; i++ {
-		if q.list[i].Id != id { // находим сообщение с указанным идентификатором
-			continue
-		}
-		q.mu.RUnlock()
-		log.Printf("Message with error: %+v", q.list[i].PayloadMap())
-		if exclude { // если указан флаг, что это уведомление нужно пропустить, то указываем на следующее
-			i++
-		}
-		q.mu.Lock()
-		q.list = q.list[i:] // удаляем все сообщения до найденного
-		q.idUnsended = 0    // в списке остались только еще не отправленные
-		q.mu.Unlock()
-		return true
-	}
-	q.mu.RUnlock()
-	return false
 }

@@ -27,15 +27,19 @@ func TestClient(t *testing.T) {
 		}
 		tokens[i] = token
 	}
-	var client = NewClient(config)
+	client := NewClient(config)
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// client.Delay = time.Duration(0)
 
 	var wg sync.WaitGroup
 	total := 5000
-	streams := 2
+	streams := 1
 	wg.Add(total / streams * streams)
 	start := time.Now()
 	for y := 0; y < streams; y++ {
-		go func(y int) {
+		func(y int) {
 			for i := 0; i < total/streams; i++ {
 				ntf := &Notification{Payload: map[string]interface{}{
 					"aps": map[string]interface{}{
@@ -50,16 +54,15 @@ func TestClient(t *testing.T) {
 				client.Send(ntf, tokens...)
 				wg.Done()
 				// time.Sleep(50 * time.Millisecond)
-				// if i%(rand.Intn(9)+1) == 0 {
-				// 	time.Sleep(time.Duration(rand.Intn(150)) * time.Millisecond)
+				// if i%(rand.Intn(59)+1) == 0 {
+				// 	time.Sleep(time.Duration(rand.Intn(70)) * time.Millisecond)
 				// }
 			}
 		}(y)
 	}
-	wg.Wait()
-	fmt.Println("All message pull completed!")
-	for client.queue.IsHasToSend() {
-		time.Sleep(time.Millisecond)
+	wg.Wait()                        // ждем, пока не будут отправлены все сообщения
+	for client.queue.IsHasToSend() { // ждем, пока очередь не пуста
+		time.Sleep(time.Millisecond * 100)
 	}
 	fmt.Println("Complete! Time:", time.Since(start).String())
 }

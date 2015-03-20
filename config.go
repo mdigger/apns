@@ -103,7 +103,7 @@ type ConfigJSON struct {
 // tlsConnectionStateString выводит в лог информацию о TLS-соединении.
 func tlsConnectionStateString(conn *tls.Conn) string {
 	var state = conn.ConnectionState()
-	return fmt.Sprint("Connection state:\n",
+	return fmt.Sprint("Connection state:",
 		"\n------------------------------------------------------------",
 		"\n  Local Address:       ", conn.LocalAddr(),
 		"\n  Remote Address:      ", conn.RemoteAddr(),
