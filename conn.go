@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// Conn описывает соединение с APNS-сервером. Соединение отслеживает все ошибки,
-// которые могут возвращаться сервером, а так же умеет автоматически переподключаться
-// к серверу в случае разрыва соединения.
-type Conn struct {
+// apnsConn описывает соединение с APNS-сервером. Соединение отслеживает все ошибки, которые могут
+// возвращаться сервером, а так же умеет автоматически переподключаться к серверу в случае разрыва
+// соединения.
+type apnsConn struct {
 	*tls.Conn           // соединение с сервером
 	isConnected bool    // флаг установленного соединения
 	isClosed    bool    // флаг закрытия соединения
@@ -19,36 +19,13 @@ type Conn struct {
 	mu          sync.Mutex
 }
 
-// NewConn возвращает соединение, не устанавливая непосредственно соединения с сервером.
-func NewConn(client *Client) *Conn {
-	return &Conn{client: client}
-}
-
-// Dial осуществляет соединение с APNS-сервером и возвращает его. Если соединение
-// установить не получилось, то возвращается ошибка.
-func Dial(client *Client) (*Conn, error) {
-	client.config.log.Println("Connecting to server", client.host)
-	tlsConn, err := client.config.Dial(client.host)
-	if err != nil {
-		return nil, err
-	}
-	client.config.log.Print(tlsConnectionStateString(tlsConn))
-	var conn = &Conn{
-		Conn:        tlsConn,
-		isConnected: true,
-		client:      client,
-	}
-	go conn.handleReads() // запускаем чтение ошибок из соединения
-	return conn, nil
-}
-
-// handleReads читает из открытого соединения и ждет получения информации об ошибке.
-// После этого автоматически закрывает текущее соединение и запускает процесс установки
-// нового соединения, кроме случаев, когда соединение закрыто из-за долгой неактивности.
+// handleReads читает из открытого соединения и ждет получения информации об ошибке. После этого
+// автоматически закрывает текущее соединение и запускает процесс установки нового соединения,
+// кроме случаев, когда соединение закрыто из-за долгой неактивности.
 //
-// Если в ответе от сервера содержится информация об идентификаторе ошибочного сообщения,
-// то все сообщения, отосланные после него будут заново автоматически отосланы.
-func (conn *Conn) handleReads() {
+// Если в ответе от сервера содержится информация об идентификаторе ошибочного сообщения, то все
+// сообщения, отосланные после него будут заново автоматически отосланы.
+func (conn *apnsConn) handleReads() {
 	// defer un(trace("[handleReads]")) // DEBUG
 	var header = make([]byte, 6) // читаем заголовок сообщения
 	_, err := conn.Read(header)
@@ -71,26 +48,31 @@ func (conn *Conn) handleReads() {
 			conn.mu.Unlock()
 			conn.client.config.log.Println("Timeout error, not doing auto reconnect")
 			return // не осуществляем подключения
+		} else {
+			conn.client.config.log.Println("Network Error:", err)
 		}
-		conn.client.config.log.Println("Network Error:", err)
 	case apnsError: // ошибка, вернувшаяся от сервер APNS
 		var err = err.(apnsError)
-		if err.Id == 0 {
+		if err.Id != 0 {
+			conn.client.config.log.Printf("Error in message [%d]: %s",
+				err.Id, apnsErrorMessages[err.Status])
+			// послать все сообщения после ошибочного заново
+			conn.mu.Lock()
+			conn.client.queue.ResendFromId(err.Id, err.Status > 0)
+			conn.mu.Unlock()
+		} else {
 			conn.client.config.log.Printf("APNS error: %s", apnsErrorMessages[err.Status])
-			break
 		}
-		conn.client.config.log.Printf("Error in message [%d]: %s", err.Id, apnsErrorMessages[err.Status])
-		// послать все сообщения после ошибочного заново
-		conn.mu.Lock()
-		conn.client.queue.ResendFromId(err.Id, err.Status > 0)
-		conn.mu.Unlock()
 	default:
-		if err == io.EOF {
+		switch err {
+		case io.EOF:
 			conn.client.config.log.Println("Connection closed by server")
-			break
+		case errBadResponseSize:
+			conn.client.config.log.Println("Bad server response")
+		default:
+			conn.client.config.log.Println("Error:", err)
+			// conn.client.config.log.Printf("Type [%T]: %+v", err, err) // DEBUG
 		}
-		conn.client.config.log.Println("Error:", err)
-		conn.client.config.log.Printf("Type [%T]: %+v", err, err) // DEBUG
 	}
 	// снова подключаемся к серверу
 	if err = conn.Connect(); err != nil {
@@ -98,7 +80,8 @@ func (conn *Conn) handleReads() {
 	}
 }
 
-func (conn *Conn) Close() {
+// Close закрывает соединение с сервером.
+func (conn *apnsConn) Close() {
 	conn.mu.Lock()
 	if conn.Conn != nil {
 		conn.Conn.Close()
@@ -108,20 +91,16 @@ func (conn *Conn) Close() {
 	conn.mu.Unlock()
 }
 
-// Connect устанавливает новое соединение с сервером. Если предыдущее соединение
-// при этом было открыто, то оно автоматически закрывается. В случае ошибки установки
-// соединения, этот процесс повторяется до бесконечности с постоянно увеличивающимся
-// интервалом между попытками.
-func (conn *Conn) Connect() error {
+// Connect устанавливает новое соединение с сервером. Если предыдущее соединение при этом было
+// открыто, то оно автоматически закрывается. В случае ошибки установки соединения, этот процесс
+// повторяется до бесконечности с постоянно увеличивающимся интервалом между попытками.
+func (conn *apnsConn) Connect() error {
 	conn.mu.Lock()
 	if conn.Conn != nil {
 		conn.Conn.Close()
 	}
 	conn.isConnected = false
-	if conn.isClosed {
-		conn.mu.Unlock()
-		return nil // не переустанавливаем закрытое соединение
-	}
+	conn.isClosed = false
 	conn.mu.Unlock()
 	var startDuration = DurationReconnect
 	for {

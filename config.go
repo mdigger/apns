@@ -12,11 +12,6 @@ import (
 	"time"
 )
 
-var (
-	TimeoutConnect = time.Duration(30) * time.Second // время ожидания ответа от сервера при соединении
-	TiemoutRead    = 2 * time.Minute                 // время закрытия соединения, если не активно
-)
-
 // Config описывает конфигурацию для соединения с APNS.
 type Config struct {
 	BundleId    string          // идентификатор приложения
@@ -36,8 +31,6 @@ func LoadConfig(filename string) (*Config, error) {
 	if err = json.Unmarshal(data, config); err != nil {
 		return nil, err
 	}
-	prefix := fmt.Sprintf("[apns:%s] ", config.BundleId)
-	config.log = log.New(os.Stderr, prefix, log.LstdFlags)
 	return config, nil
 }
 
@@ -46,10 +39,17 @@ func (config *Config) Feedback() ([]*FeedbackResponse, error) {
 	return Feedback(config)
 }
 
-// Dial устанавливает защищенное соединение с сервером и возвращает его.
-// Время ожидания ответа автоматически устанавливается равной TiemoutRead.
-// При желании, вы можете продлевать это время самостоятельно после каждого
-// успешного чтения или записи.
+// Client возвращает инициализированный Client с уже установленным соединением для отправки
+// уведомлений. Если соединение установить не удалось, то возвращается ошибка.
+func (config *Config) Connect() (*Client, error) {
+	var client = NewClient(config)
+	var err = client.Connect()
+	return client, err
+}
+
+// Dial устанавливает защищенное соединение с сервером и возвращает его. Время ожидания ответа
+// автоматически устанавливается равной TiemoutRead. При желании, вы можете продлевать это время
+// самостоятельно после каждого успешного чтения или записи.
 func (config *Config) Dial(addr string) (*tls.Conn, error) {
 	serverName, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -76,8 +76,8 @@ func (config *Config) Dial(addr string) (*tls.Conn, error) {
 	return conn, nil
 }
 
-// UnmarshalJSON позволяет читать данную конфигурацию из JSON.
-// Это исключительно вспомогательная вещь для поддержки интерфейса JSON.Unmarshaler.
+// UnmarshalJSON позволяет читать данную конфигурацию из JSON. Это исключительно вспомогательная
+// вещь для поддержки интерфейса JSON.Unmarshaler.
 func (config *Config) UnmarshalJSON(data []byte) error {
 	var dataJSON = new(ConfigJSON)
 	if err := json.Unmarshal(data, dataJSON); err != nil {
@@ -93,16 +93,23 @@ func (config *Config) UnmarshalJSON(data []byte) error {
 		Sandbox:     dataJSON.Sandbox,
 		Certificate: cert,
 	}
+	prefix := fmt.Sprintf("[apns:%s] ", config.BundleId)
+	config.log = log.New(os.Stderr, prefix, log.LstdFlags)
 	return nil
 }
 
 // ConfigJSON описывает структуру конфигурации в формате JSON.
 type ConfigJSON struct {
-	Type        string   `json:"type"`              // тип соединения: должно быть "apns"
-	BundleId    string   `json:"bundleId"`          // идентификатор приложения
-	Sandbox     bool     `json:"sandbox,omitempty"` // флаг соединения с отладочным сервером
-	Certificate [][]byte `json:"certificate"`       // сертификаты TLS
-	PrivateKey  []byte   `json:"privateKey"`        // приватный ключ
+	// тип соединения: должно быть "apns"
+	Type string `json:"type"`
+	// идентификатор приложения
+	BundleId string `json:"bundleId"`
+	// флаг соединения с отладочным сервером
+	Sandbox bool `json:"sandbox,omitempty"`
+	// сертификаты TLS
+	Certificate [][]byte `json:"certificate"`
+	// приватный ключ
+	PrivateKey []byte `json:"privateKey"`
 }
 
 // tlsConnectionStateString выводит в лог информацию о TLS-соединении.

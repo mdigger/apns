@@ -25,8 +25,7 @@ func (e apnsError) Error() string {
 	return fmt.Sprintf("APNS %s", apnsErrorMessages[e.Status])
 }
 
-// parseAPNSError позволяет создать описание ошибки из набора байт, полученного от
-// сервера Apple.
+// parseAPNSError позволяет создать описание ошибки из набора байт, полученного от сервера Apple.
 func parseAPNSError(data []byte) error {
 	if len(data) != 6 {
 		return errBadResponseSize
@@ -36,8 +35,8 @@ func parseAPNSError(data []byte) error {
 	return err
 }
 
-// apnsErrorMessages описывает известные мне на данный момент времени коды ошибок
-// и их текстовое представление.
+// apnsErrorMessages описывает известные мне на данный момент времени коды ошибок и их текстовое
+// представление.
 var apnsErrorMessages = map[uint8]string{
 	0:   "No Errors",
 	1:   "Processing Error",

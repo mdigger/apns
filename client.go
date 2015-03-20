@@ -1,39 +1,24 @@
 package apns
 
 import (
-	"errors"
 	"sync"
 	"time"
 )
 
-// адреса APNS серверов.
-const (
-	ServerApns        = "gateway.push.apple.com:2195"
-	ServerApnsSandbox = "gateway.sandbox.push.apple.com:2195"
-)
-
-var (
-	// Время задержки между переподсоединениями. После каждой ошибки соединения
-	// время задержки увеличивается на эту величину, пока не достигнет максимального
-	// времени в 30 минут. После это уже расти не будет.
-	DurationReconnect = time.Duration(10 * time.Second)
-	// Время задержки отправки сообщений по умолчанию.
-	DurationSend = 100 * time.Millisecond
-	// Ошибка добавления уведомления на отправку для закрытого клиента.
-	ErrClientIsClosed = errors.New("client is closed")
-)
-
+// Client описывает клиента для соединения с APNS и отправки уведомлений.
 type Client struct {
-	conn      *Conn              // соединение с сервером
+	conn      *apnsConn          // соединение с сервером
 	config    *Config            // конфигурация и сертификаты
 	host      string             // адрес сервера
 	queue     *notificationQueue // список уведомлений для отправки
 	isSendign bool               // флаг активности отправки
 	isClosed  bool               // флаг закрытия клиента
 	mu        sync.RWMutex       // блокировка доступа к флагу посылки
-	Delay     time.Duration      // время задержки отправки сообщений
 }
 
+// NewClient возвращает инициализированный клиент для отправки уведомлений на APNS. Подключения
+// к APNS сервису при этом не происходит: оно произойдет автоматически, когда через него попытаются
+// отправить первое уведомление.
 func NewClient(config *Config) *Client {
 	var host string
 	if config.Sandbox {
@@ -45,13 +30,37 @@ func NewClient(config *Config) *Client {
 		config: config,
 		host:   host,
 		queue:  newNotificationQueue(),
-		Delay:  DurationSend,
 	}
-	client.conn = NewConn(client)
+	client.conn = &apnsConn{client: client}
 	return client
 }
 
-// Send отправляет сообщение на указанные токены устройств.
+// Connect осуществляет подключение к APNS и возвращает ошибку, если подключение установить
+// не удалось.
+//
+// Обычно не требуется вызывать эту функцию вручную, т.к. подключение к серверу инициализируется
+// автоматически при добавлении уведомления в очередь на отправку. Так же, в случае долгого
+// не использования сервиса, переподключение к серверу тоже произойдет автоматичеки, когда
+// потребуется отправить новые данные.
+func (client *Client) Connect() error {
+	client.config.log.Println("Connecting to server", client.host)
+	tlsConn, err := client.config.Dial(client.host)
+	if err != nil {
+		return err
+	}
+	client.config.log.Print(tlsConnectionStateString(tlsConn))
+	var conn = &apnsConn{
+		Conn:        tlsConn,
+		isConnected: true,
+		client:      client,
+	}
+	go conn.handleReads() // запускаем чтение ошибок из соединения
+	client.conn = conn
+	return nil
+}
+
+// Send помещает уведомление для указанных токенов устройств в очередь на отправку и запускает
+// сервис отправки, если он не был запущен.
 func (client *Client) Send(ntf *Notification, tokens ...[]byte) error {
 	client.mu.RLock()
 	if client.isClosed {
@@ -76,6 +85,9 @@ func (client *Client) Send(ntf *Notification, tokens ...[]byte) error {
 	return nil
 }
 
+// Close закрывает соединение с APNS-сервером. Если в качестве параметра передано true, то перед
+// закрытием метод будет ждать, пока не будут отправлены все уведомления из очереди. В противном
+// случае очередь будет проигнорирована и уведомления из нее могут быть не доставлены.
 func (client *Client) Close(wait bool) {
 	client.mu.Lock()
 	client.isClosed = true // больше не принимаем новых уведомлений
@@ -86,7 +98,7 @@ func (client *Client) Close(wait bool) {
 		started := client.isSendign
 		client.mu.RUnlock()
 		if started { // ждем окончания рассылки
-			time.Sleep(client.Delay)
+			time.Sleep(DurationSend)
 			goto repeat
 		}
 	}
@@ -100,7 +112,8 @@ func (client *Client) Close(wait bool) {
 // автоматически восстанавливается.
 //
 // Если в очереди на отправку находится более одного уведомления, то они объединяются в один пакет
-// и этот пакет отправляется либо до достижении заданной длинны, либо по окончании очереди на отправку.
+// и этот пакет отправляется либо до достижении заданной длинны, либо по окончании очереди на
+// отправку.
 //
 // Функция отслеживает попытку запуска нескольких копий и не позволяет это делать ввиду полной
 // не эффективности данного мероприятия.
@@ -121,15 +134,15 @@ reconnect:
 		// проверяем соединение: если не установлено, то соединяемся
 		if client.conn == nil || !client.conn.isConnected {
 			if err := client.conn.Connect(); err != nil {
-				panic("unknown network error")
+				break // выходим, если не удалось соединиться с сервером.
 			}
 		}
 		for { // пока не отправим все
 			// если уведомление уже было раньше получено, то новое не получаем
 			if ntf == nil {
 				ntf = client.queue.Get() // получаем уведомление из очереди
-				if ntf == nil && client.Delay > 0 {
-					time.Sleep(client.Delay) // если очередь пуста, то подождем немного
+				if ntf == nil && DurationSend > 0 {
+					time.Sleep(DurationSend) // если очередь пуста, то подождем немного
 					ntf = client.queue.Get() // попробуем еще раз...
 				}
 			}

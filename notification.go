@@ -4,28 +4,19 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"time"
 )
 
-// Ошибки, возвращаемые при конвертации уведомлений во внутреннее представление и при добавлении
-// уведомлений в очередь на отправку.
-var (
-	ErrPayloadEmpty        = errors.New("payload is empty")
-	ErrPayloadTooLarge     = errors.New("payload is too large")
-	ErrNotificationExpired = errors.New("notification expired")
-)
-
-// Максимально допустимая длинна для payload уведомления.
-var MaxPayloadSize = 2048
-
 // Notification описывает формат уведомления.
 type Notification struct {
-	Payload    map[string]interface{} `json:"payload"`              // Payload не может быть пустым
-	Expiration time.Time              `json:"expiration,omitempty"` // время должно быть будущее
-	Priority   uint8                  `json:"priority,omitempty"`   // приоритет может быть 0, 5 или 8
+	// Содержимое уведомления (не может быть пустым)
+	Payload map[string]interface{} `json:"payload"`
+	// Время, до которого сообщение является актуальным (должно быть будущее)
+	Expiration time.Time `json:"expiration,omitempty"`
+	// Приоритет (может быть 0, 5 или 8)
+	Priority uint8 `json:"priority,omitempty"`
 }
 
 // toSendMessage конвертирует представление сообщения в формат отправляемого сообщения.
@@ -101,90 +92,68 @@ func (ntf *notification) Len() int {
 
 // WriteTo записывает в поток байтовое представление сообщения.
 func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
-	// = header
-	// command
 	if err = binary.Write(w, binary.BigEndian, uint8(2)); err != nil {
 		return
 	}
 	n += 1
-	// frame length
 	// не нужно учитывать размер самого заголовка - отнимаем его размер - 5
 	if err = binary.Write(w, binary.BigEndian, int32(ntf.Len()-5)); err != nil {
 		return
 	}
 	n += 4
 
-	// = data frame
-	// - device token
-	// command (1)
+	// device token
 	if err = binary.Write(w, binary.BigEndian, uint8(1)); err != nil {
 		return
 	}
 	n += 1
-	// token length (32)
-	if len(ntf.Token) != 32 { // DEBUG
-		panic("bad token size")
-	}
 	if err = binary.Write(w, binary.BigEndian, uint16(len(ntf.Token))); err != nil {
 		return
 	}
 	n += 2
-	// token data
 	if err = binary.Write(w, binary.BigEndian, ntf.Token); err != nil {
 		return
 	}
 	n += int64(len(ntf.Token))
 
-	// - payload
-	// command (2)
+	// payload
 	if err = binary.Write(w, binary.BigEndian, uint8(2)); err != nil {
 		return
 	}
 	n += 1
-	// payload length
-	if len(ntf.Payload) > MaxPayloadSize { // DEBUG
-		panic("payload too big")
-	}
 	if err = binary.Write(w, binary.BigEndian, uint16(len(ntf.Payload))); err != nil {
 		return
 	}
 	n += 2
-	// payload data
 	if err = binary.Write(w, binary.BigEndian, ntf.Payload); err != nil {
 		return
 	}
 	n += int64(len(ntf.Payload))
 	// - Notification identifier
 	if ntf.Id != 0 {
-		// command (3)
 		if err = binary.Write(w, binary.BigEndian, uint8(3)); err != nil {
 			return
 		}
 		n += 1
-		// length (4)
 		if err = binary.Write(w, binary.BigEndian, uint16(4)); err != nil {
 			return
 		}
 		n += 2
-		// identifier
 		if err = binary.Write(w, binary.BigEndian, ntf.Id); err != nil {
 			return
 		}
 		n += 4
 	}
-	// - Expiration date
+	// Expiration date
 	if ntf.Expiration != 0 {
-		// command (4)
 		if err = binary.Write(w, binary.BigEndian, uint8(4)); err != nil {
 			return
 		}
 		n += 1
-		// length (4)
 		if err = binary.Write(w, binary.BigEndian, uint16(4)); err != nil {
 			return
 		}
 		n += 2
-		// data
 		if err = binary.Write(w, binary.BigEndian, ntf.Expiration); err != nil {
 			return
 		}
@@ -192,25 +161,18 @@ func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	// Priority
 	if ntf.Priority == 5 || ntf.Priority == 10 {
-		// command (5)
 		if err = binary.Write(w, binary.BigEndian, uint8(5)); err != nil {
 			return
 		}
 		n += 1
-		// length (4)
 		if err = binary.Write(w, binary.BigEndian, uint16(4)); err != nil {
 			return
 		}
 		n += 2
-		// data
 		if err = binary.Write(w, binary.BigEndian, ntf.Priority); err != nil {
 			return
 		}
 		n += 1
-	}
-	// DEBUG
-	if int(n) != ntf.Len() {
-		panic("bad message length")
 	}
 	return
 }

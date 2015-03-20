@@ -7,12 +7,6 @@ import (
 	"time"
 )
 
-// адреса feedback серверов.
-const (
-	ServerFeedback        = "feedback.push.apple.com:2196"
-	ServerFeedbackSandbox = "feedback.sandbox.push.apple.com:2196"
-)
-
 // Feedback осуществляет соединение с feedback сервером и возвращает список ответов от него.
 // После этого соединение автоматически закрывается.
 func Feedback(config *Config) ([]*FeedbackResponse, error) {
@@ -51,7 +45,7 @@ func Feedback(config *Config) ([]*FeedbackResponse, error) {
 			return result, err
 		}
 		var response = &FeedbackResponse{
-			timestamp: binary.BigEndian.Uint32(header[0:4]),
+			Timestamp: binary.BigEndian.Uint32(header[0:4]),
 			Token:     tokenBuffer,
 		}
 		result = append(result, response)
@@ -60,12 +54,12 @@ func Feedback(config *Config) ([]*FeedbackResponse, error) {
 
 // FeedbackResponse описывает формат элемента ответа от feedback сервера.
 type FeedbackResponse struct {
-	timestamp uint32
-	Token     []byte
+	Timestamp uint32 // метка времени
+	Token     []byte // токен устройства
 }
 
 // String возвращает строковое представление токена.
 func (fr *FeedbackResponse) String() string { return hex.EncodeToString(fr.Token) }
 
 // Time возвращает время генерации сообщения.
-func (fr *FeedbackResponse) Time() time.Time { return time.Unix(int64(fr.timestamp), 0) }
+func (fr *FeedbackResponse) Time() time.Time { return time.Unix(int64(fr.Timestamp), 0) }
