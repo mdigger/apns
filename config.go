@@ -34,6 +34,15 @@ func LoadConfig(filename string) (*Config, error) {
 	return config, nil
 }
 
+func (config *Config) SetLogger(llog *log.Logger) {
+	if llog == nil {
+		prefix := fmt.Sprintf("[apns:%s] ", config.BundleId)
+		config.log = log.New(os.Stderr, prefix, log.LstdFlags)
+	} else {
+		config.log = llog
+	}
+}
+
 // Feedback соединяется с APNS Feedback сервером и возвращает информацию, полученную от него.
 func (config *Config) Feedback() ([]*FeedbackResponse, error) {
 	return Feedback(config)
@@ -87,6 +96,9 @@ func (config *Config) UnmarshalJSON(data []byte) error {
 		bytes.Join(dataJSON.Certificate, []byte{'\n'}), dataJSON.PrivateKey)
 	if err != nil {
 		return err
+	}
+	if config == nil {
+		return ErrConfigNil
 	}
 	*config = Config{
 		BundleId:    dataJSON.BundleId,

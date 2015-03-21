@@ -1,6 +1,7 @@
 package apns
 
 import (
+	"encoding/hex"
 	"io"
 	"sync"
 	"time"
@@ -55,7 +56,7 @@ func newNotificationQueue() *notificationQueue {
 // Если Notification содержит некорректные данные для уведомления, то возвращается ошибка и ни одного
 // сообщения при этом в очередь добавлено не будет. Также проверяется длина токена устройства:
 // если она не соответствует 32 байтам, то такие токены просто молча игнорируются.
-func (q *notificationQueue) AddNotification(ntf *Notification, tokens ...[]byte) error {
+func (q *notificationQueue) AddNotification(ntf *Notification, tokens ...string) error {
 	if len(tokens) == 0 {
 		return nil
 	}
@@ -65,10 +66,14 @@ func (q *notificationQueue) AddNotification(ntf *Notification, tokens ...[]byte)
 	}
 	q.mu.Lock()
 	for _, token := range tokens {
-		if len(token) != 32 {
+		btoken, err := hex.DecodeString(token)
+		if err != nil {
+			continue // игнорируем неверные токены устройств
+		}
+		if len(btoken) != 32 {
 			continue // игнорируем токены устройств с неверным размером
 		}
-		var item = template.WithToken(token) // добавляем токен
+		var item = template.WithToken(btoken) // добавляем токен
 		q.counter++
 		item.Id = q.counter           // присваиваем уникальный идентификатор
 		q.list = append(q.list, item) // помещаем в список на отправку

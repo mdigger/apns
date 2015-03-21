@@ -46,7 +46,7 @@ func (conn *apnsConn) handleReads() {
 			conn.mu.Lock()
 			conn.isConnected = false
 			conn.mu.Unlock()
-			conn.client.config.log.Println("Timeout error, not doing auto reconnect")
+			conn.client.config.log.Println("Timeout, not doing auto reconnect")
 			return // не осуществляем подключения
 		} else {
 			conn.client.config.log.Println("Network Error:", err)

@@ -61,7 +61,7 @@ func (client *Client) Connect() error {
 
 // Send помещает уведомление для указанных токенов устройств в очередь на отправку и запускает
 // сервис отправки, если он не был запущен.
-func (client *Client) Send(ntf *Notification, tokens ...[]byte) error {
+func (client *Client) Send(ntf *Notification, tokens ...string) error {
 	client.mu.RLock()
 	if client.isClosed {
 		client.mu.RUnlock()

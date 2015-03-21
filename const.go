@@ -51,3 +51,4 @@ var (
 
 // Ошибка добавления уведомления на отправку для закрытого клиента.
 var ErrClientIsClosed = errors.New("client is closed")
+var ErrConfigNil = errors.New("Config: UnmarshalJSON on nil pointer")
