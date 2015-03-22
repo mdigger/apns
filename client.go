@@ -1,19 +1,17 @@
 package apns
 
 import (
-	"sync"
 	"time"
 )
 
 // Client описывает клиента для соединения с APNS и отправки уведомлений.
 type Client struct {
-	conn      *apnsConn          // соединение с сервером
-	config    *Config            // конфигурация и сертификаты
-	host      string             // адрес сервера
-	queue     *notificationQueue // список уведомлений для отправки
-	isSendign bool               // флаг активности отправки
-	isClosed  bool               // флаг закрытия клиента
-	mu        sync.RWMutex       // блокировка доступа к флагу посылки
+	conn    *apnsConn          // соединение с сервером
+	config  *Config            // конфигурация и сертификаты
+	host    string             // адрес сервера
+	queue   *notificationQueue // список уведомлений для отправки
+	sending aBool              // флаг активности отправки
+	closed  aBool              // флаг закрытия клиента
 }
 
 // NewClient возвращает инициализированный клиент для отправки уведомлений на APNS. Подключения
@@ -50,10 +48,10 @@ func (client *Client) Connect() error {
 	}
 	client.config.log.Print(tlsConnectionStateString(tlsConn))
 	var conn = &apnsConn{
-		Conn:        tlsConn,
-		isConnected: true,
-		client:      client,
+		Conn:   tlsConn,
+		client: client,
 	}
+	conn.connected.Set(true)
 	go conn.handleReads() // запускаем чтение ошибок из соединения
 	client.conn = conn
 	return nil
@@ -62,24 +60,16 @@ func (client *Client) Connect() error {
 // Send помещает уведомление для указанных токенов устройств в очередь на отправку и запускает
 // сервис отправки, если он не был запущен.
 func (client *Client) Send(ntf *Notification, tokens ...string) error {
-	client.mu.RLock()
-	if client.isClosed {
-		client.mu.RUnlock()
+	if client.closed.Is() {
 		return ErrClientIsClosed
 	}
-	client.mu.RUnlock()
 	// добавляем сообщение в очередь на отправку
 	if err := client.queue.AddNotification(ntf, tokens...); err != nil {
 		return err
 	}
 	// разбираемся с отправкой
-	client.mu.RLock()
-	started := client.isSendign
-	client.mu.RUnlock()
-	if !started {
-		client.mu.Lock()
-		client.isSendign = true // взводим флаг запуска сервиса
-		client.mu.Unlock()
+	if !client.sending.Is() {
+		client.sending.Set(true)
 		go client.sendQueue() // запускаем отправку сообщений из очереди
 	}
 	return nil
@@ -89,15 +79,10 @@ func (client *Client) Send(ntf *Notification, tokens ...string) error {
 // закрытием метод будет ждать, пока не будут отправлены все уведомления из очереди. В противном
 // случае очередь будет проигнорирована и уведомления из нее могут быть не доставлены.
 func (client *Client) Close(wait bool) {
-	client.mu.Lock()
-	client.isClosed = true // больше не принимаем новых уведомлений
-	client.mu.Unlock()
+	client.closed.Set(true)
 	if wait {
 	repeat:
-		client.mu.RLock()
-		started := client.isSendign
-		client.mu.RUnlock()
-		if started { // ждем окончания рассылки
+		if client.sending.Is() { // ждем окончания рассылки
 			time.Sleep(DurationSend)
 			goto repeat
 		}
@@ -132,7 +117,7 @@ func (client *Client) sendQueue() {
 reconnect:
 	for { // делаем это пока не отправим все...
 		// проверяем соединение: если не установлено, то соединяемся
-		if client.conn == nil || !client.conn.isConnected {
+		if client.conn == nil || !client.conn.connected.Is() {
 			if err := client.conn.Connect(); err != nil {
 				break // выходим, если не удалось соединиться с сервером.
 			}
@@ -168,8 +153,6 @@ reconnect:
 			sended++         // увеличиваем счетчик отправленного
 		}
 	}
-	putBuffer(buf) // освобождаем буфер после работы
-	client.mu.Lock()
-	client.isSendign = false // сбрасываем флаг активной посылки
-	client.mu.Unlock()
+	putBuffer(buf)            // освобождаем буфер после работы
+	client.sending.Set(false) // сбрасываем флаг активной посылки
 }

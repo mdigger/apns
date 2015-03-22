@@ -12,11 +12,11 @@ import (
 // возвращаться сервером, а так же умеет автоматически переподключаться к серверу в случае разрыва
 // соединения.
 type apnsConn struct {
-	*tls.Conn           // соединение с сервером
-	isConnected bool    // флаг установленного соединения
-	isClosed    bool    // флаг закрытия соединения
-	client      *Client // клиент соединения
-	mu          sync.Mutex
+	*tls.Conn         // соединение с сервером
+	connected aBool   // флаг установленного соединения
+	closed    aBool   // флаг закрытия соединения
+	client    *Client // клиент соединения
+	mu        sync.Mutex
 }
 
 // handleReads читает из открытого соединения и ждет получения информации об ошибке. После этого
@@ -32,20 +32,15 @@ func (conn *apnsConn) handleReads() {
 	if err == nil {
 		err = parseAPNSError(header) // разбираем сообщение и конвертируем в описание ошибки
 	}
-	conn.mu.Lock()
-	if conn.isClosed {
-		conn.mu.Unlock()
+	if conn.closed.Is() {
 		return // выходим без обработки ошибок при закрытии соединения
 	}
-	conn.mu.Unlock()
 	// обрабатываем ошибки в зависимости от их типа
 	switch err.(type) {
 	case net.Error: // сетевая ошибка
 		var err = err.(net.Error)
 		if err.Timeout() {
-			conn.mu.Lock()
-			conn.isConnected = false
-			conn.mu.Unlock()
+			conn.connected.Set(false)
 			conn.client.config.log.Println("Timeout, not doing auto reconnect")
 			return // не осуществляем подключения
 		} else {
@@ -86,9 +81,9 @@ func (conn *apnsConn) Close() {
 	if conn.Conn != nil {
 		conn.Conn.Close()
 	}
-	conn.isConnected = false
-	conn.isClosed = true
 	conn.mu.Unlock()
+	conn.connected.Set(false)
+	conn.closed.Set(true)
 }
 
 // Connect устанавливает новое соединение с сервером. Если предыдущее соединение при этом было
@@ -99,9 +94,9 @@ func (conn *apnsConn) Connect() error {
 	if conn.Conn != nil {
 		conn.Conn.Close()
 	}
-	conn.isConnected = false
-	conn.isClosed = false
 	conn.mu.Unlock()
+	conn.connected.Set(false)
+	conn.closed.Set(false)
 	var startDuration = DurationReconnect
 	for {
 		conn.client.config.log.Println("Connecting to server", conn.client.host)
@@ -111,8 +106,8 @@ func (conn *apnsConn) Connect() error {
 			conn.client.config.log.Print(tlsConnectionStateString(tlsConn))
 			conn.mu.Lock()
 			conn.Conn = tlsConn
-			conn.isConnected = true
 			conn.mu.Unlock()
+			conn.connected.Set(true)
 			go conn.handleReads() // запускаем чтение ошибок из соединения
 			return nil
 		case net.Error: // сетевая ошибка
