@@ -14,7 +14,7 @@ import (
 
 // Config описывает конфигурацию для соединения с APNS.
 type Config struct {
-	BundleId    string          // идентификатор приложения
+	BundleID    string          // идентификатор приложения
 	Sandbox     bool            // флаг отладочного режима
 	Certificate tls.Certificate // сертификаты
 	log         *log.Logger     // лог для вывода информации
@@ -34,9 +34,10 @@ func LoadConfig(filename string) (*Config, error) {
 	return config, nil
 }
 
+// SetLogger позволяет установить свою систему вывода логов.
 func (config *Config) SetLogger(llog *log.Logger) {
 	if llog == nil {
-		prefix := fmt.Sprintf("[apns:%s] ", config.BundleId)
+		prefix := fmt.Sprintf("[apns:%s] ", config.BundleID)
 		config.log = log.New(os.Stderr, prefix, log.LstdFlags)
 	} else {
 		config.log = llog
@@ -48,7 +49,7 @@ func (config *Config) Feedback() ([]*FeedbackResponse, error) {
 	return Feedback(config)
 }
 
-// Client возвращает инициализированный Client с уже установленным соединением для отправки
+// Connect возвращает инициализированный Client с уже установленным соединением для отправки
 // уведомлений. Если соединение установить не удалось, то возвращается ошибка.
 func (config *Config) Connect() (*Client, error) {
 	var client = NewClient(config)
@@ -101,11 +102,11 @@ func (config *Config) UnmarshalJSON(data []byte) error {
 		return ErrConfigNil
 	}
 	*config = Config{
-		BundleId:    dataJSON.BundleId,
+		BundleID:    dataJSON.BundleID,
 		Sandbox:     dataJSON.Sandbox,
 		Certificate: cert,
 	}
-	prefix := fmt.Sprintf("[apns:%s] ", config.BundleId)
+	prefix := fmt.Sprintf("[apns:%s] ", config.BundleID)
 	config.log = log.New(os.Stderr, prefix, log.LstdFlags)
 	return nil
 }
@@ -115,7 +116,7 @@ type ConfigJSON struct {
 	// тип соединения: должно быть "apns"
 	Type string `json:"type"`
 	// идентификатор приложения
-	BundleId string `json:"bundleId"`
+	BundleID string `json:"bundleId"`
 	// флаг соединения с отладочным сервером
 	Sandbox bool `json:"sandbox,omitempty"`
 	// сертификаты TLS

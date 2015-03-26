@@ -61,7 +61,7 @@ func (ntf *Notification) convert() (*notification, error) {
 // notification описывает внутреннее, подготовленное к отправке, представление
 // сообщения, используемое внутри приложения.
 type notification struct {
-	Id         uint32    // уникальный идентификатор уведомления
+	ID         uint32    // уникальный идентификатор уведомления
 	Token      []byte    // идентификатор устройства, которому это адресовано
 	Payload    []byte    // содержимое уведомления в бинарном виде
 	Expiration uint32    // дата и время, после которого сообщение считается не актуальным
@@ -76,7 +76,7 @@ func (ntf *notification) Len() int {
 	// 1+2+len(payload) - тело сообщения
 	var length = 5 + 3 + len(ntf.Token) + 3 + len(ntf.Payload)
 	// 1+2+4 - идентификатор сообщения (если есть)
-	if ntf.Id != 0 {
+	if ntf.ID != 0 {
 		length += 7
 	}
 	// 1+2+4 - срок окончания актуальности (если есть)
@@ -95,7 +95,7 @@ func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, uint8(2)); err != nil {
 		return
 	}
-	n += 1
+	n++
 	// не нужно учитывать размер самого заголовка - отнимаем его размер - 5
 	if err = binary.Write(w, binary.BigEndian, int32(ntf.Len()-5)); err != nil {
 		return
@@ -106,7 +106,7 @@ func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, uint8(1)); err != nil {
 		return
 	}
-	n += 1
+	n++
 	if err = binary.Write(w, binary.BigEndian, uint16(len(ntf.Token))); err != nil {
 		return
 	}
@@ -120,7 +120,7 @@ func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, uint8(2)); err != nil {
 		return
 	}
-	n += 1
+	n++
 	if err = binary.Write(w, binary.BigEndian, uint16(len(ntf.Payload))); err != nil {
 		return
 	}
@@ -130,16 +130,16 @@ func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += int64(len(ntf.Payload))
 	// - Notification identifier
-	if ntf.Id != 0 {
+	if ntf.ID != 0 {
 		if err = binary.Write(w, binary.BigEndian, uint8(3)); err != nil {
 			return
 		}
-		n += 1
+		n++
 		if err = binary.Write(w, binary.BigEndian, uint16(4)); err != nil {
 			return
 		}
 		n += 2
-		if err = binary.Write(w, binary.BigEndian, ntf.Id); err != nil {
+		if err = binary.Write(w, binary.BigEndian, ntf.ID); err != nil {
 			return
 		}
 		n += 4
@@ -149,7 +149,7 @@ func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, uint8(4)); err != nil {
 			return
 		}
-		n += 1
+		n++
 		if err = binary.Write(w, binary.BigEndian, uint16(4)); err != nil {
 			return
 		}
@@ -164,7 +164,7 @@ func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, uint8(5)); err != nil {
 			return
 		}
-		n += 1
+		n++
 		if err = binary.Write(w, binary.BigEndian, uint16(4)); err != nil {
 			return
 		}
@@ -172,7 +172,7 @@ func (ntf *notification) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, ntf.Priority); err != nil {
 			return
 		}
-		n += 1
+		n++
 	}
 	return
 }
@@ -213,7 +213,7 @@ func (ntf *notification) ExpirationTime() time.Time { return time.Unix(int64(ntf
 // с "untokened message" и номером.
 func (ntf *notification) String() string {
 	if len(ntf.Token) == 0 {
-		return fmt.Sprintf("untokened notification [%d]", ntf.Id)
+		return fmt.Sprintf("untokened notification [%d]", ntf.ID)
 	}
-	return fmt.Sprintf("%s [%d]", ntf.TokenString(), ntf.Id)
+	return fmt.Sprintf("%s [%d]", ntf.TokenString(), ntf.ID)
 }

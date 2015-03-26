@@ -75,7 +75,7 @@ func (q *notificationQueue) AddNotification(ntf *Notification, tokens ...string)
 		}
 		var item = template.WithToken(btoken) // добавляем токен
 		q.counter++
-		item.Id = q.counter           // присваиваем уникальный идентификатор
+		item.ID = q.counter           // присваиваем уникальный идентификатор
 		q.list = append(q.list, item) // помещаем в список на отправку
 	}
 	q.mu.Unlock()
@@ -95,9 +95,9 @@ func (q *notificationQueue) IsHasToSend() bool {
 func (q *notificationQueue) Put(list ...*notification) {
 	q.mu.Lock()
 	for _, item := range list {
-		if item.Id == 0 {
+		if item.ID == 0 {
 			q.counter++
-			item.Id = q.counter
+			item.ID = q.counter
 		}
 	}
 	q.list = append(q.list, list...)
@@ -118,16 +118,16 @@ func (q *notificationQueue) Get() *notification {
 	return result
 }
 
-// ResendFromId находит в списке отправленных уведомление с таким идентификатором и переставляет указатель
+// ResendFromID находит в списке отправленных уведомление с таким идентификатором и переставляет указатель
 // на отправку на него. Возвращает true, если уведомление с таким идентификатором найдено в списке.
 // Все уведомления в списке до найденного удаляются.
 
 // Если в качестве второго параметра указано значение true, то найденное уведомление тоже исключается
 // и будут отправлены только уведомления, которые находятся в списке после него.
-func (q *notificationQueue) ResendFromId(id uint32, exclude bool) bool {
+func (q *notificationQueue) ResendFromID(id uint32, exclude bool) bool {
 	q.mu.RLock()
 	for i := 0; i < q.idUnsended; i++ {
-		if q.list[i].Id != id { // находим сообщение с указанным идентификатором
+		if q.list[i].ID != id { // находим сообщение с указанным идентификатором
 			continue
 		}
 		q.mu.RUnlock()

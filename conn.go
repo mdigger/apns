@@ -43,17 +43,16 @@ func (conn *apnsConn) handleReads() {
 			conn.connected.Set(false)
 			conn.client.config.log.Println("Timeout, not doing auto reconnect")
 			return // не осуществляем подключения
-		} else {
-			conn.client.config.log.Println("Network Error:", err)
 		}
+		conn.client.config.log.Println("Network Error:", err)
 	case apnsError: // ошибка, вернувшаяся от сервер APNS
 		var err = err.(apnsError)
-		if err.Id != 0 {
+		if err.ID != 0 {
 			conn.client.config.log.Printf("Error in message [%d]: %s",
-				err.Id, apnsErrorMessages[err.Status])
+				err.ID, apnsErrorMessages[err.Status])
 			// послать все сообщения после ошибочного заново
 			conn.mu.Lock()
-			conn.client.queue.ResendFromId(err.Id, err.Status > 0)
+			conn.client.queue.ResendFromID(err.ID, err.Status > 0)
 			conn.mu.Unlock()
 		} else {
 			conn.client.config.log.Printf("APNS error: %s", apnsErrorMessages[err.Status])

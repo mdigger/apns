@@ -14,13 +14,13 @@ var errBadResponseSize = errors.New("bad apple error size")
 type apnsError struct {
 	Type   uint8
 	Status uint8
-	Id     uint32
+	ID     uint32
 }
 
 // Error возвращает строковое представление ошибки.
 func (e apnsError) Error() string {
-	if e.Id != 0 {
-		return fmt.Sprintf("APNS %s [message id %d]", apnsErrorMessages[e.Status], e.Id)
+	if e.ID != 0 {
+		return fmt.Sprintf("APNS %s [message id %d]", apnsErrorMessages[e.Status], e.ID)
 	}
 	return fmt.Sprintf("APNS %s", apnsErrorMessages[e.Status])
 }
