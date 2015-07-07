@@ -21,7 +21,8 @@ func Feedback(config *Config) ([]*FeedbackResponse, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	config.log.Print(tlsConnectionStateString(conn))
+	config.log.Println("Feedback connection")
+	// config.log.Print(tlsConnectionStateString(conn))
 
 	var (
 		result = make([]*FeedbackResponse, 0)
