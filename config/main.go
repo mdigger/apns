@@ -15,11 +15,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/mdigger/apns"
 	"io/ioutil"
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/mdigger/apns"
 )
 
 func main() {
@@ -102,7 +103,7 @@ func CreateConfig(bundleId, certFile, keyFile string, sandbox bool) (*apns.Confi
 
 	var config = &apns.ConfigJSON{
 		Type:        "apns",
-		BundleId:    bundleId,
+		BundleID:    bundleId,
 		Sandbox:     sandbox,
 		Certificate: cert,
 		PrivateKey:  pem.EncodeToMemory(keyDERBlock),
