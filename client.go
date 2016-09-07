@@ -1,158 +1,183 @@
 package apns
 
 import (
+	"bytes"
+	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
+
+	"golang.org/x/net/http2"
 )
 
-// Client описывает клиента для соединения с APNS и отправки уведомлений.
+// Client describes APNS client service to send notifications to devices.
 type Client struct {
-	conn    *apnsConn          // соединение с сервером
-	config  *Config            // конфигурация и сертификаты
-	host    string             // адрес сервера
-	queue   *notificationQueue // список уведомлений для отправки
-	sending aBool              // флаг активности отправки
-	closed  aBool              // флаг закрытия клиента
+	*CertificateInfo              // certificate info
+	Sandbox          bool         // sandbox flag
+	httpСlient       *http.Client // http client for push
 }
 
-// NewClient возвращает инициализированный клиент для отправки уведомлений на APNS. Подключения
-// к APNS сервису при этом не происходит: оно произойдет автоматически, когда через него попытаются
-// отправить первое уведомление.
-func NewClient(config *Config) *Client {
-	var host string
-	if config.Sandbox {
-		host = ServerApnsSandbox
-	} else {
-		host = ServerApns
+// New initialize and return the APNS client to send notifications.
+func New(certificate tls.Certificate) *Client {
+	var tlsConfig = &tls.Config{
+		Certificates: []tls.Certificate{certificate}}
+	var transport = &http.Transport{TLSClientConfig: tlsConfig}
+	if err := http2.ConfigureTransport(transport); err != nil {
+		panic(err) // HTTP/2 initialization error
 	}
-	var client = &Client{
-		config: config,
-		host:   host,
-		queue:  newNotificationQueue(),
+	return &Client{
+		CertificateInfo: GetCertificateInfo(certificate),
+		httpСlient: &http.Client{
+			Timeout:   15 * time.Second,
+			Transport: transport,
+		},
 	}
-	client.conn = &apnsConn{client: client}
-	return client
 }
 
-// Connect осуществляет подключение к APNS и возвращает ошибку, если подключение установить
-// не удалось.
+// Notification describes the information for sending Apple Push.
+type Notification struct {
+	// Unique device token for the app.
+	//
+	// Every notification that your provider sends to APNs must be accompanied
+	// by the device token associated of the device for which the notification
+	// is intended.
+	Token string
+
+	// A canonical UUID that identifies the notification.  If there is an error
+	// sending the notification, APNs uses this value to identify the
+	// notification to your server.
+	//
+	// The canonical form is 32 lowercase hexadecimal digits, displayed in five
+	// groups separated by hyphens in the form 8-4-4-4-12. An example UUID is
+	// as follows: 123e4567-e89b-12d3-a456-42665544000
+	//
+	// If you omit this header, a new UUID is created by APNs and returned in
+	// the response.
+	ID string
+
+	// This identifies the date when the notification is no longer valid and
+	// can be discarded.
+	//
+	// If this value is in future time, APNs stores the notification and tries
+	// to deliver it at least once, repeating the attempt as needed if it is
+	// unable to deliver the notification the first time. If the value is
+	// before now, APNs treats the notification as if it expires immediately
+	// and does not store the notification or attempt to redeliver it.
+	Expiration time.Time
+
+	// Specify the hexadecimal bytes (hex-string) of the device token for the
+	// target device.
+	//
+	// Flag for send the push message at a time that takes into account power
+	// considerations for the device. Notifications with this priority might be
+	// grouped and delivered in bursts. They are throttled, and in some cases
+	// are not delivered.
+	LowPriority bool
+
+	// The topic of the remote notification, which is typically the bundle ID
+	// for your app. The certificate you create in Member Center must include
+	// the capability for this topic.
+	//
+	// If your certificate includes multiple topics, you can specify a value
+	// for this. If you omit this or your APNs certificate does not specify
+	// multiple topics, the APNs server uses the certificate’s Subject as the
+	// default topic.
+	Topic string
+
+	// The body content of your message is the JSON dictionary object
+	// containing the notification data.
+	Payload interface{}
+}
+
+// Push sends a notification to the Apple server.
 //
-// Обычно не требуется вызывать эту функцию вручную, т.к. подключение к серверу инициализируется
-// автоматически при добавлении уведомления в очередь на отправку. Так же, в случае долгого
-// не использования сервиса, переподключение к серверу тоже произойдет автоматичеки, когда
-// потребуется отправить новые данные.
-func (client *Client) Connect() error {
-	client.config.log.Println("Connecting to server", client.host)
-	tlsConn, err := client.config.Dial(client.host)
+// Return the ID value from the notification. If no value was included in the
+// notification, the server creates a new UUID and returns it.
+func (c *Client) Push(n Notification) (id string, err error) {
+	var payload []byte
+	switch data := n.Payload.(type) {
+	case []byte:
+		payload = data
+	case string:
+		payload = []byte(data)
+	case json.RawMessage:
+		payload = []byte(data)
+	default:
+		if payload, err = json.Marshal(n.Payload); err != nil {
+			return "", err
+		}
+	}
+	if len(payload) > 4096 {
+		return "", &Error{
+			Status: http.StatusRequestEntityTooLarge,
+			Reason: "PayloadTooLarge",
+		}
+	}
+	// check token format and length
+	if l := len(n.Token); l < 64 || l > 200 {
+		return "", &Error{
+			Status: http.StatusBadRequest,
+			Reason: "BadDeviceToken",
+		}
+	}
+	if _, err = hex.DecodeString(n.Token); err != nil {
+		return "", &Error{
+			Status: http.StatusBadRequest,
+			Reason: "BadDeviceToken",
+		}
+	}
+	var host = "https://api.push.apple.com"
+	if !c.CertificateInfo.Production ||
+		(c.Sandbox && c.CertificateInfo.Development) {
+		host = "https://api.development.push.apple.com"
+	}
+	req, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%v/3/device/%v", host, n.Token), bytes.NewReader(payload))
 	if err != nil {
-		return err
+		return "", err
 	}
-	client.config.log.Print(tlsConnectionStateString(tlsConn))
-	var conn = &apnsConn{
-		Conn:   tlsConn,
-		client: client,
+	req.Header.Set("Content-Type", "application/json")
+	if n.ID != "" {
+		req.Header.Set("apns-id", n.ID)
 	}
-	conn.connected.Set(true)
-	go conn.handleReads() // запускаем чтение ошибок из соединения
-	client.conn = conn
-	return nil
-}
-
-// Send помещает уведомление для указанных токенов устройств в очередь на отправку и запускает
-// сервис отправки, если он не был запущен.
-func (client *Client) Send(ntf *Notification, tokens ...string) error {
-	if client.closed.Is() {
-		return ErrClientIsClosed
-	}
-	// добавляем сообщение в очередь на отправку
-	if err := client.queue.AddNotification(ntf, tokens...); err != nil {
-		return err
-	}
-	// разбираемся с отправкой
-	if !client.sending.Is() {
-		client.sending.Set(true)
-		go client.sendQueue() // запускаем отправку сообщений из очереди
-	}
-	return nil
-}
-
-// Close закрывает соединение с APNS-сервером. Если в качестве параметра передано true, то перед
-// закрытием метод будет ждать, пока не будут отправлены все уведомления из очереди. В противном
-// случае очередь будет проигнорирована и уведомления из нее могут быть не доставлены.
-func (client *Client) Close(wait bool) {
-	client.closed.Set(true)
-	if wait {
-	repeat:
-		if client.sending.Is() { // ждем окончания рассылки
-			time.Sleep(DurationSend)
-			goto repeat
+	if !n.Expiration.IsZero() {
+		var exp string = "0"
+		if !n.Expiration.Before(time.Now()) {
+			exp = strconv.FormatInt(n.Expiration.Unix(), 10)
 		}
+		req.Header.Set("apns-expiration", exp)
 	}
-	if client.conn != nil {
-		client.conn.Close()
+	if n.LowPriority {
+		req.Header.Set("apns-priority", "5")
 	}
-}
-
-// sendQueue непосредственно осуществляет отправку уведомлений на сервер, пока в очереди есть
-// хотя бы одно уведомление. Если в процессе отсылки происходит ошибка соединения, то соединение
-// автоматически восстанавливается.
-//
-// Если в очереди на отправку находится более одного уведомления, то они объединяются в один пакет
-// и этот пакет отправляется либо до достижении заданной длинны, либо по окончании очереди на
-// отправку.
-//
-// Функция отслеживает попытку запуска нескольких копий и не позволяет это делать ввиду полной
-// не эффективности данного мероприятия.
-func (client *Client) sendQueue() {
-	// defer un(trace("[send]"))        // DEBUG
-	if !client.queue.IsHasToSend() { // выходим, если нечего отправлять
-		// log.Println("Nothing to send...")
-		return
+	if len(c.CertificateInfo.Topics) > 0 {
+		if n.Topic == "" {
+			n.Topic = c.CertificateInfo.BundleID
+		}
+		req.Header.Set("apns-topic", n.Topic)
 	}
-	// отправляем сообщения на сервер
-	var (
-		ntf    *notification // последнее полученное на отправку уведомление
-		sended uint          // количество отправленных
-		buf    = getBuffer() // получаем из пулла байтовый буфер
-	)
-reconnect:
-	for { // делаем это пока не отправим все...
-		// проверяем соединение: если не установлено, то соединяемся
-		if client.conn == nil || !client.conn.connected.Is() {
-			if err := client.conn.Connect(); err != nil {
-				break // выходим, если не удалось соединиться с сервером.
+	resp, err := c.httpСlient.Do(req)
+	if err != nil {
+		if err, ok := err.(*url.Error); ok {
+			if err, ok := err.Err.(http2.GoAwayError); ok {
+				return "", decodeError(0, strings.NewReader(err.DebugData))
 			}
 		}
-		for { // пока не отправим все
-			// если уведомление уже было раньше получено, то новое не получаем
-			if ntf == nil {
-				ntf = client.queue.Get() // получаем уведомление из очереди
-				if ntf == nil && DurationSend > 0 {
-					time.Sleep(DurationSend) // если очередь пуста, то подождем немного
-					ntf = client.queue.Get() // попробуем еще раз...
-				}
-			}
-			// если больше нет уведомлений, а буфер не пустой, или после добавления
-			// этого уведомления буфер переполнится, то отправляем буфер на сервер
-			if (ntf == nil && buf.Len() > 0) || (buf.Len()+ntf.Len() > MaxFrameBuffer) {
-				n, err := buf.WriteTo(client.conn) // отправляем буфер на сервер
-				if err != nil {
-					client.config.log.Println("Send error:", err)
-					break // ошибка соединения - соединяемся заново
-				}
-				// увеличиваем время ожидания ответа после успешной отправки данных
-				client.conn.SetReadDeadline(time.Now().Add(TiemoutRead))
-				client.config.log.Printf("Sended %d messages (%d bytes)", sended, n)
-				sended = 0 // сбрасываем счетчик отправленного
-			}
-			if ntf == nil { // очередь закончилась
-				// log.Println("Queue is empty...")
-				break reconnect // прерываем весь цикл
-			}
-			ntf.WriteTo(buf) // сохраняем бинарное представление уведомления в буфере
-			ntf = nil        // забываем про уже отправленное
-			sended++         // увеличиваем счетчик отправленного
-		}
+		return "", err
 	}
-	putBuffer(buf)            // освобождаем буфер после работы
-	client.sending.Set(false) // сбрасываем флаг активной посылки
+	defer resp.Body.Close()
+	// defer func() {
+	// 	io.CopyN(ioutil.Discard, resp.Body, 2<<10)
+	// 	resp.Body.Close()
+	// }()
+	id = resp.Header.Get("apns-id")
+	if resp.StatusCode != http.StatusOK {
+		return id, decodeError(resp.StatusCode, resp.Body)
+	}
+	return id, nil
 }

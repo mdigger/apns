@@ -1,6 +1,5 @@
-
-*.pem
-
-*.json
-
-config/config
+*.p12
+*.zip
+*.tar
+*.out
+push/push

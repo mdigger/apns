@@ -1,72 +1,112 @@
 package apns
 
 import (
-	"encoding/hex"
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"math/rand"
 	"sync"
 	"testing"
 	"time"
 )
 
-var tokenStrings = []string{
-	"F389410AE1B57972DBBF6EB0C05C2626AB69EDE88F523D7EED49FA6E63A6C266",
-	"B8108B88198789E9696E11A2FFE9710B776A9851673C2FDEDFCE1BE318AE7C90",
+func TestClient(t *testing.T) {
+	certificate, err := LoadCertificate("cert.p12", "xopen123")
+	if err != nil {
+		t.Fatal("Load certificate error:", err)
+	}
+	client := New(*certificate)
+	for _, token := range []string{
+		"BE311B5BADA725B323B1A56E03ED25B4814D6B9EDF5B02D3D605840860FEBB28", // iPad
+		"507C1666D7ECA6C26F40BC322A35CCB937E2BF02DFDACA8FCCAAD5CEE580EE8C", // iPad mini
+		"6B0420FA3B631DF5C13FB9DDC1BE8131C52B4E02580BB5F76BFA32862F284572", // iPhone
+		// "6B0420FA3B631DF5C13FB9DDC1BE8131C52B4E02580BB5F76BFA32862F284570", // Bad
+	} {
+		id, err := client.Push(Notification{
+			Token:   token,
+			Payload: `{"aps":{"alert":"Test message"}}`,
+		})
+		fmt.Println(id)
+		if err != nil {
+			t.Error("Push error:", err)
+		}
+	}
 }
 
-func TestClient(t *testing.T) {
-	config, err := LoadConfig("config.json")
+func TestClient2(t *testing.T) {
+	certificate, err := LoadCertificate("cert.p12", "xopen123")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("Load certificate error:", err)
 	}
-	var tokens = make([][]byte, len(tokenStrings))
-	for i, str := range tokenStrings {
-		token, err := hex.DecodeString(str)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tokens[i] = token
-	}
-	client := NewClient(config)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// client.Delay = time.Duration(0)
+	client := New(*certificate)
 
+	_, err = client.Push(Notification{
+		Payload: []byte(`{"aps":{"alert":"Test message"}}`),
+		Token:   "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+	})
+	if err == nil {
+		t.Error("bad token format")
+	}
+	_, err = client.Push(Notification{
+		Payload: json.RawMessage(bytes.Repeat([]byte("x"), 5000)),
+	})
+	if err == nil {
+		t.Error("bad payload size checking")
+	}
+	_, err = client.Push(Notification{
+		Payload: complex(float64(128), float64(6)),
+	})
+	if err == nil {
+		t.Error("bad payload format")
+	}
+	_, err = client.Push(Notification{
+		Payload: map[string]interface{}{
+			"test":   "message",
+			"number": 2,
+		},
+		Token: "XXXXXXXX",
+	})
+	if err == nil {
+		t.Error("bad token size")
+	}
+	client.Sandbox = true
+	_, err = client.Push(Notification{
+		ID:          "123e4567-e89b-12d3-a456-42665544000",
+		Expiration:  time.Now().Add(time.Hour),
+		LowPriority: true,
+		Token:       "BE311B5BADA725B323B1A56E03ED25B4814D6B9EDF5B02D3D605840860FEBB28",
+		Payload:     `{"aps":{"alert":"Test message"}}`,
+	})
+	if err == nil {
+		t.Error("unregistered token for topic support")
+	}
+}
+
+func TestClientGoroutine(t *testing.T) {
+	certificate, err := LoadCertificate("cert.p12", "xopen123")
+	if err != nil {
+		t.Fatal("Load certificate error:", err)
+	}
+	client := New(*certificate)
+	tokens := []string{
+		"BE311B5BADA725B323B1A56E03ED25B4814D6B9EDF5B02D3D605840860FEBB28", // iPad
+		"507C1666D7ECA6C26F40BC322A35CCB937E2BF02DFDACA8FCCAAD5CEE580EE8C", // iPad mini
+		"6B0420FA3B631DF5C13FB9DDC1BE8131C52B4E02580BB5F76BFA32862F284572", // iPhone
+		// "6B0420FA3B631DF5C13FB9DDC1BE8131C52B4E02580BB5F76BFA32862F284570", // Bad
+	}
 	var wg sync.WaitGroup
-	total := 10000
-	streams := 2
-	wg.Add(total / streams * streams)
-	start := time.Now()
-	for y := 0; y < streams; y++ {
-		go func(y int) {
-			for i := 0; i < total/streams; i++ {
-				ntf := &Notification{Payload: map[string]interface{}{
-					"aps": map[string]interface{}{
-						"alert": fmt.Sprintf("Test message %d-%d", y+1, i+1),
-						"badge": i,
-					},
-					"time": time.Now().Format(time.RFC3339Nano),
-					// "uint32": rand.Uint32(),
-					// "inf64":  rand.Int63(),
-					// "float":  rand.Float64(),
-				}}
-				if err := client.Send(ntf, tokens...); err != nil {
-					t.Error(err)
-				}
-				wg.Done()
-				time.Sleep(50 * time.Millisecond)
-				if i%(rand.Intn(9)+1) == 0 {
-					time.Sleep(time.Duration(rand.Intn(300)) * time.Millisecond)
-				}
+	wg.Add(len(tokens))
+	for _, token := range tokens {
+		go func(token string) {
+			id, err := client.Push(Notification{
+				Token:   token,
+				Payload: `{"aps":{"alert":"Test message"}}`,
+			})
+			fmt.Println(id)
+			wg.Done()
+			if err != nil {
+				fmt.Println("Push error:", err)
 			}
-		}(y)
+		}(token)
 	}
-	wg.Wait()                        // ждем, пока не будут отправлены все сообщения
-	for client.queue.IsHasToSend() { // ждем, пока очередь не пуста
-		time.Sleep(time.Millisecond * 100)
-	}
-	client.Close(true)
-	fmt.Println("Complete! Time:", time.Since(start).String())
-	// time.Sleep(time.Second * 10)
+	wg.Wait()
 }
