@@ -2,7 +2,7 @@
 
 [![GoDoc](https://godoc.org/github.com/mdigger/apns?status.svg)](https://godoc.org/github.com/mdigger/apns)
 [![Build Status](https://travis-ci.org/mdigger/apns.svg)](https://travis-ci.org/mdigger/apns)
-[![Coverage Status](https://coveralls.io/repos/github/mdigger/apns/badge.svg)](https://coveralls.io/github/mdigger/apns?branch=master)
+[![Coverage Status](https://coveralls.io/repos/github/mdigger/apns/badge.svg?branch=master)](https://coveralls.io/github/mdigger/apns?branch=master)
 
 Apple Push Notification service includes the APNs Provider API that allows you to send remote notifications to your app on iOS, tvOS, and OS X devices, and to Apple Watch via iOS. This API is based on the HTTP/2 network protocol. Each interaction starts with a POST request, containing a JSON payload, that you send from your provider server to APNs. APNs then forwards the notification to your app on a specific user device.
 
