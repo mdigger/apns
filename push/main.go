@@ -32,7 +32,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/mdigger/apns3"
+	"github.com/mdigger/apns"
 )
 
 func main() {
