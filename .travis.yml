@@ -7,8 +7,6 @@ notifications:
 before_install:
 - openssl aes-256-cbc -K $encrypted_0e4c5f4e1133_key -iv $encrypted_0e4c5f4e1133_iv
   -in certificates.tar.enc -out certificates.tar -d
-- openssl aes-256-cbc -K $encrypted_ed0e3d154005_key -iv $encrypted_ed0e3d154005_iv
-  -in certificates.tar.enc -out certificates.tar -d
 - tar xvf certificates.tar
 install:
 - go get golang.org/x/tools/cmd/cover
@@ -19,6 +17,5 @@ script:
 - $HOME/gopath/bin/goveralls -coverprofile=coverage.out -service=travis-ci -repotoken
   $COVERALLS_TOKEN
 env:
-  secure: OfHM58DW+81OQ4WjCDE52sKPvDCuOhyCwsq6s88nfgDNSHDjC0maUf3uayLWiyLoqzeBs5i3AcyDbLiniBcYtiWPyxiidGWG1vcPXDtJ/iOBIB2h8rYKXhOrTUtVVsaSYy04KHuV0C0xFuwMaj3EAkHrUKu3XrF7FzTUkT/RwQpY0NfMu5uZ1cwA6QqpQal80ZmEGpRbrir4wNli8YLxUpwVrP6E6104I4sgHGwICa/s5avGvaa12290UM2gh5PleL0FtqC/8oGl9R4Pl2NRbLu7KEy8ThI5hZrnxp2lF2nTww/oI+todGpvTl/4ZmQCuBeQD9E2TewIvlWjqEnzG2m8Yuld/rWEFUBRZoET9gpvSzR4KxMZNyJWk9ZcsyFlXXCBO+Cpn3cUkm5PaVBKGvCFaHrQ2UmuNu8jmMtUDzGdAte8+A2+eoL0xYt9//CFadeHpctrlAUAkN2tSQGtVrblybXjLouUoQIuwMcZZT73hBZPC8Q43TKJ17xHuB1HdXz7aPfc2fcQmCEa/Vq+KgkNFDkoNOXeNg6pltyS31ben9swEzJ6QOj7UFDX5H4a09mALftDpGsKUHJjK8bL2pSag2I/Ot8Qc9t3DYh+Umv5IEzXSc9xVdNm5qOMxWRPQZciiLSidYkaM0Mn7DhFTT7rKjTs1/vMoK44qOMXy/o=
   global:
     secure: HXpgdi10bOsisaO7b9bfHLSsXRg09m1uVc6Si95qUaTS97anEyMY/DRemHrBkvujfmxM/1xNN6cRfebQVxrWymNiI3tCFDgQOgWXrh9clTDFkIpAQXKr/ochYSpeeJG/Zqa90CTcp6j3e6k9ROqdVpVjvCCVSLKTwnFiS2VThhGxpOutLg7FtHOoZHiZ2PFqugDCbC2kKn/qpAT54EmSCPGlRHjd8bvUdZxgNxvTofhhjoYnXKcZExD6B8+joBtagFHRUXJ68vkj8vvRL07EAb5fJYwyLQUAkqSDvh7T5wQ9l4o+pe0rk57GXVGsGlD82NLotkG6zxEzW6OHI9DsNqwPzrtOOcTAE81MaNg/SCsjwWDFsjIyb5l+LsRi0ABrm+yi07/7Ei2k+0OF1LEImTZOoP9Z3nKTNjo+TTolbJ8z3ESHjyy4AENJb7HrBdZjKQAIi9/mlkYVKUUN0ke2bMMKlr49mRH5k90zZgWz6J/O3KsCdeqvsKoY6uQjaV3adQre3sDlpuwZxjVf48ZBsP1cGboz/6cEF1eLjQDhMGCGmRW1cFwP6j7D6XnKhxYesoKKr6ZBsP9jcLcJjkFf2I+d2MbRsdLbl3oPXjC9bGKeO4AB+LeXlgV2SGOsiBFyMb+YaMTf/hJmA7L9j6ogORPrOr73/IFgDIQlHXJ2rPc=
