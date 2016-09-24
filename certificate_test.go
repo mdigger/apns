@@ -30,7 +30,7 @@ func TestCertificate(t *testing.T) {
 			fmt.Println("Certificate error:", err)
 		}
 		certificate.Leaf = nil
-		info := GetCertificateInfo(*certificate)
+		info := GetCertificateInfo(certificate)
 		if info == nil {
 			t.Error("Bad certificate info")
 			continue
@@ -85,7 +85,7 @@ func TestCertificateWithErrors(t *testing.T) {
 				PrivateKey:  nil,
 				Leaf:        nil,
 			}
-			info := GetCertificateInfo(*certificate)
+			info := GetCertificateInfo(certificate)
 			if info != nil {
 				t.Error("Bad info")
 			}
@@ -94,7 +94,7 @@ func TestCertificateWithErrors(t *testing.T) {
 			fmt.Println("Certificate error:", err)
 		}
 		certificate.Leaf = nil
-		info := GetCertificateInfo(*certificate)
+		info := GetCertificateInfo(certificate)
 		if info == nil {
 			t.Error("Bad certificate info")
 			continue

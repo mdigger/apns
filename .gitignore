@@ -3,3 +3,5 @@
 *.tar
 *.out
 push/push
+
+*.p8

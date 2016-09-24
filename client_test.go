@@ -68,7 +68,6 @@ func TestClient2(t *testing.T) {
 	if err == nil {
 		t.Error("bad token size")
 	}
-	client.Sandbox = true
 	_, err = client.Push(Notification{
 		ID:          "123e4567-e89b-12d3-a456-42665544000",
 		Expiration:  time.Now().Add(time.Hour),

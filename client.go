@@ -1,183 +1,144 @@
 package apns
 
 import (
-	"bytes"
 	"crypto/tls"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/net/http2"
 )
 
-// Client describes APNS client service to send notifications to devices.
+// Timeout contains the maximum waiting time connection to the APNS server.
+var Timeout = 15 * time.Second
+
+// Client supports APNs Provider API.
+//
+// The APNs provider API lets you send remote notifications to your app on iOS,
+// tvOS, and macOS devices, and to Apple Watch via iOS. The API is based on the
+// HTTP/2 network protocol. Each interaction starts with a POST request,
+// containing a JSON payload, that you send from your provider server to APNs.
+// APNs then forwards the notification to your app on a specific user device.
+//
+// The first step in sending a remote notification is to establish a connection
+// with the appropriate APNs server Host:
+// 	Development server: api.development.push.apple.com:443
+// 	Production server:  api.push.apple.com:443
+//
+// Note: You can alternatively use port 2197 when communicating with APNs. You
+// might do this, for example, to allow APNs traffic through your firewall but
+// to block other HTTPS traffic.
+//
+// The APNs server allows multiple concurrent streams for each connection. The
+// exact number of streams is based on the authentication method used (i.e.
+// provider certificate or token) and the server load, so do not assume a
+// specific number of streams. When you connect to APNs without a provider
+// certificate, only one stream is allowed on the connection until you send a
+// push message with valid token.
+//
+// It is recommended to close all existing connections to APNs and open new
+// connections when existing certificate or the key used to sign provider tokens
+// is revoked.
 type Client struct {
-	*CertificateInfo              // certificate info
-	Sandbox          bool         // sandbox flag
-	httpСlient       *http.Client // http client for push
+	Host       string           // http URL
+	ci         *CertificateInfo // certificate
+	token      *ProviderToken   // provider token
+	httpСlient *http.Client     // http client for push
 }
 
-// New initialize and return the APNS client to send notifications.
-func New(certificate tls.Certificate) *Client {
-	var tlsConfig = &tls.Config{
-		Certificates: []tls.Certificate{certificate}}
-	var transport = &http.Transport{TLSClientConfig: tlsConfig}
+func newClient(certificate *tls.Certificate, pt *ProviderToken) *Client {
+	client := &Client{
+		Host: "https://api.push.apple.com",
+	}
+	if pt != nil {
+		client.token = pt
+	}
+	tlsConfig := new(tls.Config)
+	if certificate != nil {
+		tlsConfig.Certificates = []tls.Certificate{*certificate}
+		client.ci = GetCertificateInfo(certificate)
+		if !client.ci.Production {
+			client.Host = "https://api.development.push.apple.com"
+		}
+	}
+	transport := &http.Transport{TLSClientConfig: tlsConfig}
 	if err := http2.ConfigureTransport(transport); err != nil {
 		panic(err) // HTTP/2 initialization error
 	}
-	return &Client{
-		CertificateInfo: GetCertificateInfo(certificate),
-		httpСlient: &http.Client{
-			Timeout:   15 * time.Second,
-			Transport: transport,
-		},
+	client.httpСlient = &http.Client{
+		Timeout:   Timeout,
+		Transport: transport,
 	}
+	return client
 }
 
-// Notification describes the information for sending Apple Push.
-type Notification struct {
-	// Unique device token for the app.
-	//
-	// Every notification that your provider sends to APNs must be accompanied
-	// by the device token associated of the device for which the notification
-	// is intended.
-	Token string
-
-	// A canonical UUID that identifies the notification.  If there is an error
-	// sending the notification, APNs uses this value to identify the
-	// notification to your server.
-	//
-	// The canonical form is 32 lowercase hexadecimal digits, displayed in five
-	// groups separated by hyphens in the form 8-4-4-4-12. An example UUID is
-	// as follows: 123e4567-e89b-12d3-a456-42665544000
-	//
-	// If you omit this header, a new UUID is created by APNs and returned in
-	// the response.
-	ID string
-
-	// This identifies the date when the notification is no longer valid and
-	// can be discarded.
-	//
-	// If this value is in future time, APNs stores the notification and tries
-	// to deliver it at least once, repeating the attempt as needed if it is
-	// unable to deliver the notification the first time. If the value is
-	// before now, APNs treats the notification as if it expires immediately
-	// and does not store the notification or attempt to redeliver it.
-	Expiration time.Time
-
-	// Specify the hexadecimal bytes (hex-string) of the device token for the
-	// target device.
-	//
-	// Flag for send the push message at a time that takes into account power
-	// considerations for the device. Notifications with this priority might be
-	// grouped and delivered in bursts. They are throttled, and in some cases
-	// are not delivered.
-	LowPriority bool
-
-	// The topic of the remote notification, which is typically the bundle ID
-	// for your app. The certificate you create in Member Center must include
-	// the capability for this topic.
-	//
-	// If your certificate includes multiple topics, you can specify a value
-	// for this. If you omit this or your APNs certificate does not specify
-	// multiple topics, the APNs server uses the certificate’s Subject as the
-	// default topic.
-	Topic string
-
-	// The body content of your message is the JSON dictionary object
-	// containing the notification data.
-	Payload interface{}
+func New(certificate tls.Certificate) *Client {
+	return newClient(&certificate, nil)
 }
 
-// Push sends a notification to the Apple server.
+// NewWithToken returns an initialized Client with JSON Web Token (JWT)
+// authentication support.
+func NewWithToken(pt *ProviderToken) *Client {
+	return newClient(nil, pt)
+}
+
+// Push send push notification to APNS API.
 //
-// Return the ID value from the notification. If no value was included in the
-// notification, the server creates a new UUID and returns it.
-func (c *Client) Push(n Notification) (id string, err error) {
-	var payload []byte
-	switch data := n.Payload.(type) {
-	case []byte:
-		payload = data
-	case string:
-		payload = []byte(data)
-	case json.RawMessage:
-		payload = []byte(data)
-	default:
-		if payload, err = json.Marshal(n.Payload); err != nil {
-			return "", err
-		}
-	}
-	if len(payload) > 4096 {
-		return "", &Error{
-			Status: http.StatusRequestEntityTooLarge,
-			Reason: "PayloadTooLarge",
-		}
-	}
-	// check token format and length
-	if l := len(n.Token); l < 64 || l > 200 {
-		return "", &Error{
-			Status: http.StatusBadRequest,
-			Reason: "BadDeviceToken",
-		}
-	}
-	if _, err = hex.DecodeString(n.Token); err != nil {
-		return "", &Error{
-			Status: http.StatusBadRequest,
-			Reason: "BadDeviceToken",
-		}
-	}
-	var host = "https://api.push.apple.com"
-	if !c.CertificateInfo.Production ||
-		(c.Sandbox && c.CertificateInfo.Development) {
-		host = "https://api.development.push.apple.com"
-	}
-	req, err := http.NewRequest(http.MethodPost,
-		fmt.Sprintf("%v/3/device/%v", host, n.Token), bytes.NewReader(payload))
+// The APNs Provider API consists of a request and a response that you configure
+// and send using an HTTP/2 POST command. You use the request to send a push
+// notification to the APNs server and use the response to determine the results
+// of that request.
+//
+// Response from APNs:
+// 	- The apns-id value from the request. If no value was included in the
+//	  request, the server creates a new UUID and returns it in this header.
+// 	- :status - the HTTP status code.
+//	- reason - the error indicating the reason for the failure. The error code
+// 	  is specified as a string.
+//	- timestamp - if the value in the :status header is 410, the value of this
+//	  key is the last time at which APNs confirmed that the device token was no
+//	  longer valid for the topic. Stop pushing notifications until the device
+//	  registers a token with a later timestamp with your provider.
+func (c *Client) Push(notification Notification) (id string, err error) {
+	req, err := notification.request(c.Host)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if n.ID != "" {
-		req.Header.Set("apns-id", n.ID)
+	// add default certificate topic
+	if notification.Topic == "" && c.ci != nil && len(c.ci.Topics) > 0 {
+		// If your certificate includes multiple topics, you must specify a
+		// value for this header.
+		req.Header.Set("apns-topic", c.ci.BundleID)
 	}
-	if !n.Expiration.IsZero() {
-		var exp string = "0"
-		if !n.Expiration.Before(time.Now()) {
-			exp = strconv.FormatInt(n.Expiration.Unix(), 10)
-		}
-		req.Header.Set("apns-expiration", exp)
+	if c.token != nil {
+		// The provider token that authorizes APNs to send push notifications
+		// for the specified topics. The token is in Base64URL-encoded JWT
+		// format, specified as bearer <provider token>.
+		// When the provider certificate is used to establish a connection, this
+		// request header is ignored.
+		req.Header.Set("authorization", "bearer "+c.token.JWT())
 	}
-	if n.LowPriority {
-		req.Header.Set("apns-priority", "5")
-	}
-	if len(c.CertificateInfo.Topics) > 0 {
-		if n.Topic == "" {
-			n.Topic = c.CertificateInfo.BundleID
-		}
-		req.Header.Set("apns-topic", n.Topic)
-	}
+
 	resp, err := c.httpСlient.Do(req)
-	if err != nil {
-		if err, ok := err.(*url.Error); ok {
-			if err, ok := err.Err.(http2.GoAwayError); ok {
-				return "", decodeError(0, strings.NewReader(err.DebugData))
-			}
+	if err, ok := err.(*url.Error); ok {
+		// If APNs decides to terminate an established HTTP/2 connection, it
+		// sends a GOAWAY frame. The GOAWAY frame includes JSON data in its
+		// payload with a reason key, whose value indicates the reason for the
+		// connection termination.
+		if err, ok := err.Err.(http2.GoAwayError); ok {
+			return "", parseError(0, strings.NewReader(err.DebugData))
 		}
+	}
+	if err != nil {
 		return "", err
 	}
+	// For a successful request, the body of the response is empty. On failure,
+	// the response body contains a JSON dictionary.
 	defer resp.Body.Close()
-	// defer func() {
-	// 	io.CopyN(ioutil.Discard, resp.Body, 2<<10)
-	// 	resp.Body.Close()
-	// }()
 	id = resp.Header.Get("apns-id")
-	if resp.StatusCode != http.StatusOK {
-		return id, decodeError(resp.StatusCode, resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		return id, nil
 	}
-	return id, nil
+	return id, parseError(resp.StatusCode, resp.Body)
 }

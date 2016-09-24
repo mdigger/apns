@@ -48,7 +48,7 @@ type CertificateInfo struct {
 }
 
 // GetCertificateInfo parses and returns information about the certificate.
-func GetCertificateInfo(certificate tls.Certificate) *CertificateInfo {
+func GetCertificateInfo(certificate *tls.Certificate) *CertificateInfo {
 	var cert = certificate.Leaf
 	if cert == nil {
 		var err error

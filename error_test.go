@@ -17,7 +17,7 @@ func TestErrors(t *testing.T) {
 		401: `{"reason": "BadDeviceToken"}`,
 		500: `{xxxx}`,
 	} {
-		err := decodeError(status, strings.NewReader(body))
+		err := parseError(status, strings.NewReader(body))
 		if apnsErr, ok := err.(*Error); ok {
 			fmt.Println(apnsErr.IsToken(), apnsErr.Time(), apnsErr)
 		} else {

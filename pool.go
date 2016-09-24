@@ -1,8 +1,14 @@
 package apns
 
 // ClientsPool manages a pool of Clients.
+//
+// The APNs server allows multiple concurrent streams for each connection. The
+// exact number of streams is based on the authentication method used (i.e.
+// provider certificate or token) and the server load, so do not assume a
+// specific number of streams. When you connect to APNs without a provider
+// certificate, only one stream is allowed on the connection until you send a
+// push message with valid token.
 type ClientsPool struct {
-	*Client       // APNS Client
 	notifications chan Notification
 }
 
@@ -14,6 +20,12 @@ type Response struct {
 }
 
 // Pool wraps a client with a queue for sending notifications asynchronously.
+//
+// You can establish multiple connections to APNs servers to improve
+// performance. When you send a large number of remote notifications, distribute
+// them across connections to several server endpoints. This improves
+// performance, compared to using a single connection, by letting you send
+// remote notifications faster and by letting APNs deliver them faster.
 func (c *Client) Pool(workers uint, responses chan<- Response) *ClientsPool {
 	notifications := make(chan Notification)
 	// startup workers to send notifications
@@ -28,7 +40,6 @@ func (c *Client) Pool(workers uint, responses chan<- Response) *ClientsPool {
 		}()
 	}
 	return &ClientsPool{
-		Client:        c,
 		notifications: notifications,
 	}
 }
