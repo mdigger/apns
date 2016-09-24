@@ -49,26 +49,24 @@ type Client struct {
 
 func newClient(certificate *tls.Certificate, pt *ProviderToken) *Client {
 	client := &Client{
-		Host: "https://api.push.apple.com",
+		Host:       "https://api.push.apple.com",
+		httpСlient: &http.Client{Timeout: Timeout},
 	}
 	if pt != nil {
 		client.token = pt
 	}
-	tlsConfig := new(tls.Config)
 	if certificate != nil {
-		tlsConfig.Certificates = []tls.Certificate{*certificate}
+		transport := &http.Transport{
+			TLSClientConfig: &tls.Config{
+				Certificates: []tls.Certificate{*certificate}}}
+		if err := http2.ConfigureTransport(transport); err != nil {
+			panic(err) // HTTP/2 initialization error
+		}
+		client.httpСlient.Transport = transport
 		client.ci = GetCertificateInfo(certificate)
 		if !client.ci.Production {
 			client.Host = "https://api.development.push.apple.com"
 		}
-	}
-	transport := &http.Transport{TLSClientConfig: tlsConfig}
-	if err := http2.ConfigureTransport(transport); err != nil {
-		panic(err) // HTTP/2 initialization error
-	}
-	client.httpСlient = &http.Client{
-		Timeout:   Timeout,
-		Transport: transport,
 	}
 	return client
 }
