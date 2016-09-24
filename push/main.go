@@ -87,7 +87,9 @@ func main() {
 		log.Fatalln("Error loading certificate:", err)
 	}
 	client := apns.New(*cert)
-	client.Sandbox = (*development)
+	if *development {
+		client.Host = "https://api.development.push.apple.com"
+	}
 	for _, token := range tokens {
 		id, err := client.Push(apns.Notification{
 			Token:   token,
