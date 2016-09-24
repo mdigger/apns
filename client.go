@@ -105,6 +105,7 @@ func (c *Client) Push(notification Notification) (id string, err error) {
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("user-agent", "mdigger-apns/3.1")
 	// add default certificate topic
 	if notification.Topic == "" && c.ci != nil && len(c.ci.Topics) > 0 {
 		// If your certificate includes multiple topics, you must specify a
