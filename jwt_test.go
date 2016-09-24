@@ -73,7 +73,7 @@ func TestVerifyJWT(t *testing.T) {
 	}
 }
 
-func TestJWTClient(t *testing.T) {
+func TestClientJWT(t *testing.T) {
 	teamID, keyID, filename := "W23G28NPJW", "67XV3VSJ95", "APNSAuthKey_67XV3VSJ95.p8"
 	pt, err := NewProviderToken(teamID, keyID)
 	if err != nil {
