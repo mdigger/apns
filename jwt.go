@@ -19,10 +19,10 @@ import (
 
 // Error parsing token provider.
 var (
-	ErrPTBad          = errors.New("bad provider token")
-	ErrPTBadKeyID     = errors.New("bad provider token key id")
-	ErrPTBadTeamID    = errors.New("bad provider token team ID")
-	ErrPTBadKeyFormat = errors.New("unknown provider token private key format")
+	ErrPTBad           = errors.New("bad provider token")
+	ErrPTBadKeyID      = errors.New("bad provider token key id")
+	ErrPTBadTeamID     = errors.New("bad provider token team ID")
+	ErrPTBadPrivateKey = errors.New("bad provider token private key")
 )
 
 // ProviderToken is Provider Authentication Tokens.
@@ -74,7 +74,7 @@ func (pt *ProviderToken) LoadPrivateKey(filename string) error {
 	}
 	privateKey, ok := private.(*ecdsa.PrivateKey)
 	if !ok {
-		return ErrPTBadKeyFormat
+		return ErrPTBadPrivateKey
 	}
 	pt.mu.Lock()
 	pt.jwt = ""
@@ -154,7 +154,7 @@ var JWTLifeTime = time.Hour * 24 * 30
 // Issued At claim indicating the time when the token was generated. APNs will
 // reject push messages with an Expired Provider Token error if the token issue
 // timestamp is not within the last hour.
-func (pt *ProviderToken) JWT() string {
+func (pt *ProviderToken) JWT() (string, error) {
 	pt.mu.RLock()
 	jwt := pt.jwt
 	created := pt.created
@@ -162,17 +162,20 @@ func (pt *ProviderToken) JWT() string {
 	if jwt == "" || time.Since(created) > JWTLifeTime {
 		return pt.createJWT()
 	}
-	return jwt
+	return jwt, nil
 }
 
 // createJWT the JWT and store it in internal cache.
-func (pt *ProviderToken) createJWT() string {
-	buf := []byte(`????????????` +
+func (pt *ProviderToken) createJWT() (string, error) {
+	if pt.privateKey == nil {
+		return "", ErrPTBadPrivateKey
+	}
+	buf := []byte(`************` +
 		`{"alg":"ES256","kid":"0000000000"}.` + // header
-		`?????????????` +
+		`*************` +
 		`{"iss":"0000000000","iat":0000000000}.` + // claims
-		`???????????????????????????????????????????` +
-		`???????????????????????????????????????????`) // sign
+		`*******************************************` +
+		`*******************************************`) // sign
 	// header
 	copy(buf[34:44], pt.keyID[:10])
 	base64.RawURLEncoding.Encode(buf[:46], buf[12:46])
@@ -195,7 +198,7 @@ func (pt *ProviderToken) createJWT() string {
 	pt.jwt = jwt
 	pt.created = created
 	pt.mu.Unlock()
-	return jwt
+	return jwt, nil
 }
 
 const providerTokenPEMType = "APNS TOKEN"

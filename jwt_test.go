@@ -50,6 +50,17 @@ func TestJWT(t *testing.T) {
 	fmt.Println(pt.JWT())
 }
 
+func TestMissingJWTPriveteKey(t *testing.T) {
+	teamID, keyID := "W23G28NPJW", "67XV3VSJ95"
+	pt, err := NewProviderToken(teamID, keyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pt.JWT(); err != ErrPTBadPrivateKey {
+		t.Error("bad private key")
+	}
+}
+
 func TestVerifyJWT(t *testing.T) {
 	teamID, keyID, filename := "W23G28NPJW", "67XV3VSJ95", "APNSAuthKey_67XV3VSJ95.p8"
 	pt, err := NewProviderToken(teamID, keyID)
@@ -60,7 +71,10 @@ func TestVerifyJWT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokenString := pt.JWT()
+	tokenString, err := pt.JWT()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return pt.privateKey.Public(), nil

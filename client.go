@@ -2,6 +2,7 @@ package apns
 
 import (
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -116,7 +117,9 @@ func (c *Client) Push(notification Notification) (id string, err error) {
 		// format, specified as bearer <provider token>.
 		// When the provider certificate is used to establish a connection, this
 		// request header is ignored.
-		req.Header.Set("authorization", "bearer "+c.token.JWT())
+		if token, err := c.token.JWT(); err == nil {
+			req.Header.Set("authorization", fmt.Sprintf("bearer %s", token))
+		}
 	}
 
 	resp, err := c.httpСlient.Do(req)
