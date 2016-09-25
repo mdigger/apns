@@ -105,13 +105,46 @@ func TestClientJWT(t *testing.T) {
 		"6B0420FA3B631DF5C13FB9DDC1BE8131C52B4E02580BB5F76BFA32862F284572", // iPhone
 	} {
 		id, err := client.Push(Notification{
-			Token:   token,
-			Topic:   "com.xyzrd.trackintouch",
-			Payload: `{"aps":{"alert":"JWT Client test message"}}`,
+			Token:      token,
+			Topic:      "com.xyzrd.trackintouch",
+			CollapseID: "test",
+			Payload:    `{"aps":{"alert":"JWT Client test message"}}`,
 		})
 		fmt.Println(id)
 		if err != nil {
 			t.Error("Push error:", err)
 		}
 	}
+}
+
+func TestBadJWT(t *testing.T) {
+	_, err := NewProviderToken("W23G28NPJ", "67XV3VSJ95")
+	if err != ErrPTBadTeamID {
+		t.Fatal("bad team id")
+	}
+	_, err = NewProviderToken("W23G28NPJW", "67XV3VSJ9")
+	if err != ErrPTBadKeyID {
+		t.Fatal("bad key id")
+	}
+	pt, err := NewProviderToken("W23G28NPJW", "67XV3VSJ95")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = pt.LoadPrivateKey("filename")
+	if err == nil {
+		t.Fatal("bad read file with private key")
+	}
+	err = pt.SetPrivateKey([]byte("private key"))
+	if err == nil {
+		t.Fatal("bad parse private key")
+	}
+	err = pt.UnmarshalJSON([]byte(`{"private": "key"}`))
+	if err == nil {
+		t.Fatal("bad parse json")
+	}
+	err = pt.UnmarshalJSON([]byte(`"private": "key"`))
+	if err == nil {
+		t.Fatal("bad parse json 2")
+	}
+
 }
