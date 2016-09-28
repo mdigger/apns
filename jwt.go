@@ -141,7 +141,10 @@ func (pt *ProviderToken) UnmarshalJSON(data []byte) error {
 
 // JWTLifeTime contains the lifetime of the authorization token provider,
 // through which it needs to be automatically updated.
-var JWTLifeTime = time.Hour * 24 * 30
+//
+// APNs will reject push messages with an Expired Provider Token error if the
+// token issue timestamp is not within the last hour.
+var JWTLifeTime = time.Minute * 55
 
 // JWT returns a string with the signed authorization token in JWT format.
 //
