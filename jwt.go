@@ -64,6 +64,12 @@ func (pt *ProviderToken) LoadPrivateKey(filename string) error {
 	if err != nil {
 		return err
 	}
+	return pt.SetPrivateKeyPKCS8(data)
+}
+
+// SetPrivateKeyPKCS8 adds to the ProviderToken private key in the format of
+// PKCS8.
+func (pt *ProviderToken) SetPrivateKeyPKCS8(data []byte) error {
 	block, data := pem.Decode(data)
 	if block != nil {
 		data = block.Bytes
