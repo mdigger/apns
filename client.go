@@ -45,13 +45,13 @@ type Client struct {
 	Host       string           // http URL
 	ci         *CertificateInfo // certificate
 	token      *ProviderToken   // provider token
-	httpСlient *http.Client     // http client for push
+	HTTPСlient *http.Client     // http client for push
 }
 
 func newClient(certificate *tls.Certificate, pt *ProviderToken) *Client {
 	client := &Client{
 		Host:       "https://api.push.apple.com",
-		httpСlient: &http.Client{Timeout: Timeout},
+		HTTPСlient: &http.Client{Timeout: Timeout},
 	}
 	if pt != nil {
 		client.token = pt
@@ -63,7 +63,7 @@ func newClient(certificate *tls.Certificate, pt *ProviderToken) *Client {
 		if err := http2.ConfigureTransport(transport); err != nil {
 			panic(err) // HTTP/2 initialization error
 		}
-		client.httpСlient.Transport = transport
+		client.HTTPСlient.Transport = transport
 		client.ci = GetCertificateInfo(certificate)
 		if !client.ci.Production {
 			client.Host = "https://api.development.push.apple.com"
@@ -122,7 +122,7 @@ func (c *Client) Push(notification Notification) (id string, err error) {
 		}
 	}
 
-	resp, err := c.httpСlient.Do(req)
+	resp, err := c.HTTPСlient.Do(req)
 	if err, ok := err.(*url.Error); ok {
 		// If APNs decides to terminate an established HTTP/2 connection, it
 		// sends a GOAWAY frame. The GOAWAY frame includes JSON data in its
